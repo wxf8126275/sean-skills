@@ -1,0 +1,21 @@
+# .gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temp
+*.tmp
+*.log
+
+# Project-level state (created when using sean in a real project)
+/docs/.sean/
+
+# Project-level test reports (generated at runtime)
+/test-reports/
