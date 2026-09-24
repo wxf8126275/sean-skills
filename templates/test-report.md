@@ -1,31 +1,37 @@
-# 测试报告：Task {{task_id}} — {{task_name}}
+# Test Report: Task {{task_id}} — {{task_name}}
 
-> **所属功能**：{{feature_name}}
-> **执行时间**：{{timestamp}}
-> **执行者**：agent
+> **Feature**: {{feature_name}}
+> **Timestamp**: {{ISO8601}}
+> **Status**: {{PASS | FAIL | FIXED}}
 
-## 结果摘要
+## Result
 
-| 指标 | 数值 |
-|------|------|
-| ✅ 通过 | {{tests_passed}} |
-| ❌ 失败 | {{tests_failed}} |
-| ⏭️ 跳过 | {{tests_skipped}} |
-| 🔧 自动修复 | {{tests_fixed}} |
+| Metric | Count |
+|--------|-------|
+| ✅ Passed | {{tests_passed}} |
+| ❌ Failed | {{tests_failed}} |
+| 🔧 Auto-fixed | {{tests_fixed}} |
 
-## 失败详情
+## RED Phase
 
-{{#each failures}}
-### ❌ {{test_name}}
 ```
-{{error_output}}
+{{red_observation}}
 ```
 
-**根因**：{{root_cause}}
-**修复方式**：{{fix_action}}
+## GREEN Phase
 
-{{/each}}
+```
+{{green_observation}}
+```
 
-## 结论
+## Self-Review Checklist
 
-**状态**：{{final_status}}
+- [ ] Function length ≤ 40 lines
+- [ ] File length ≤ 400 lines
+- [ ] No `any` / `object` types
+- [ ] Error handling explicit
+- [ ] No TODO/FIXME/HACK
+
+## Verdict
+
+**{{PASS | FAIL | BLOCKED}}** — {{summary}}

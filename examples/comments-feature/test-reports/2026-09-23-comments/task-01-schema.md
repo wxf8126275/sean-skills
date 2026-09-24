@@ -1,22 +1,50 @@
-# 测试报告：Task 1 — schema
+# Test Report: Task 1 — schema + entity
 
-> **所属功能**：comments
-> **执行时间**：2026-09-23 15:30
-> **执行者**：agent
+> **Feature**: comments
+> **Timestamp**: 2026-09-23T10:05:00+08:00
+> **Status**: PASS
 
-## 结果摘要
+## Result
 
-| 指标 | 数值 |
-|------|------|
-| ✅ 通过 | 2 |
-| ❌ 失败 | 0 |
-| ⏭️ 跳过 | 0 |
-| 🔧 自动修复 | 0 |
+| Metric | Count |
+|--------|-------|
+| ✅ Passed | 2 |
+| ❌ Failed | 0 |
+| 🔧 Auto-fixed | 0 |
 
-## 失败详情
+## RED Phase
 
-无。
+```
+FAIL apps/server/src/core/comment/comment.entity.spec.ts
+  Comment Entity
+    ✕ should define comment table structure with required fields
 
-## 结论
+  ● Comment Entity › should define comment table structure with required fields
+    ReferenceError: Comment is not defined
 
-**状态**：PASS
+RED confirmed: Comment entity not yet implemented — test exercises new behavior.
+```
+
+## GREEN Phase
+
+```
+PASS apps/server/src/core/comment/comment.entity.spec.ts
+  Comment Entity
+    ✓ should define comment table structure with required fields
+    ✓ should validate content is not empty
+
+2 passed in 0.8s
+Re-run from scratch: PASS (no warnings, no skips)
+```
+
+## Self-Review Checklist
+
+- [x] Function length ≤ 40 lines
+- [x] File length ≤ 400 lines
+- [x] No `any` / `object` types
+- [x] Error handling explicit (via class-validator)
+- [x] No TODO/FIXME/HACK
+
+## Verdict
+
+**PASS** — Comment entity and DTO implemented with validation. Migration-ready.

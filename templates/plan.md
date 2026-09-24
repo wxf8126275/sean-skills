@@ -1,43 +1,35 @@
-# 实现计划：{{feature_name}}
+# Plan: {{feature_name}}
 
-> **来源需求**：{{requirement_path}}
-> **执行者**：agent
-> **创建日期**：{{date}}
+> **Generated**: {{ISO8601}}
+> **Requirement**: ../requirements/{{date}}-{{feature}}.md
 
-## Goal
+## Task Summary
 
-{{one_sentence_goal}}
+| # | Task | Depends On | Complexity | Parallel Safe |
+|---|------|-----------|------------|---------------|
+| 1 | ...  | —         | low        | yes           |
 
-## Architecture
+## Dependency Graph
 
-{{two_three_sentences}}
+Task 1 → Task 2
+Task 1 → Task 3
 
-## Tech Stack
+## Task Details
 
-{{tech_stack}}
+### Task 1: {{name}}
 
----
-
-{{#each tasks}}
-
-## Task {{id}}: {{name}}
-
-**Files**:
-- Create: `{{files_create}}`
-- Modify: `{{files_modify}}`
-- Test: `{{test_file}}`
+- **Creates**: `{{files_create}}`
+- **Modifies**: `{{files_modify}}`
+- **Test**: `{{test_file}}`
+- **Acceptance**: {{criteria}}
 
 **Steps**:
-{{#each steps}}
-- [ ] {{this}}
-{{/each}}
+1. Write failing test: `{{test_description}}`
+2. Run → confirm RED
+3. Write minimal implementation
+4. Run → confirm GREEN
+5. Self-review (conventions compliance)
 
-**Acceptance**: {{acceptance}}
-
-{{#if depends_on}}
 **Depends on**: {{depends_on}}
-{{/if}}
 
 ---
-
-{{/each}}

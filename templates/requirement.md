@@ -1,37 +1,27 @@
 # 需求：{{feature_name}}
 
-> **状态**：draft | approved | in_progress | done
+> **状态**：DRAFT | PLANNED | IN_PROGRESS | DONE | BLOCKED
 > **创建日期**：{{date}}
-> **负责人**：{{author}}
-> **目标分支**：{{branch}}
 
 ---
 
-## 背景与目标
+## Problem
 
-{{background}}
+{{one_sentence_problem_statement}}
 
-## 功能点
+## Behaviors
 
-### F1: {{feature_point_1}}
 - {{behavior_1}}
 - {{behavior_2}}
 
-### F2: {{feature_point_2}}
-- {{behavior}}
+## Acceptance Criteria
 
-## 非功能需求
+- [ ] {{criterion_1}} → verifiable by {{test_or_demo}}
+- [ ] {{criterion_2}} → verifiable by {{test_or_demo}}
 
-- **性能**：{{performance}}
-- **安全**：{{security}}
-- **兼容性**：{{compatibility}}
+## Context
 
-## 验收标准
-
-- [ ] {{acceptance_criteria_1}}
-- [ ] {{acceptance_criteria_2}}
-- [ ] {{acceptance_criteria_3}}
-
-## 不考虑的范围
-
-{{out_of_scope}}
+- **Tech stack**: {{tech_stack}}
+- **Related features**: {{dependencies}}
+- **Constraints**: {{performance_security_compat}}
+- **Non-goals**: {{what_this_does_not_do}}
