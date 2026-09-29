@@ -1,7 +1,7 @@
 ---
 name: sean
 description: "AI-Native Team Development Workflow: standardizes how AI agents produce transferable knowledge — any AI can take over any other AI's work, even across context resets or model changes. Zero external dependencies."
-version: 3.1.0
+version: 3.2.0
 trigger: sean
 ---
 
@@ -393,7 +393,7 @@ Use when state.json gets out of sync with actual test results (e.g., process kil
 
 ## Command: `sean review <name>`
 
-**AI self-review pass after all tasks pass.** Checks output quality against conventions.
+**AI self-review pass after all tasks pass.** Evaluates output quality against conventions AND assesses the Agent Work Loop across five dimensions.
 
 ### Steps
 
@@ -409,7 +409,43 @@ Use when state.json gets out of sync with actual test results (e.g., process kil
    - No `assert True` or trivially passing tests?
    - Tests don't depend on implementation details?
    - RED was actually observed (test reports mention red phase)?
-4. Output review report:
+4. **Five-Dimension Agent Work Loop Assessment**:
+
+   For each dimension, assign evidence state and score (0-100):
+
+   | Dimension | Question | Evidence States |
+   |-----------|----------|-----------------|
+   | **Task Understanding** | Did the agent understand the goal and "done" meaning? | `present` (requirement exists) → `wired` (acceptance criteria clear) → `exercised` (tasks map to criteria) → `outcome-supported` (regression proves it) |
+   | **Controlled Execution** | Did work follow a supported, repeatable path? | `present` (plan exists) → `wired` (dependencies declared) → `exercised` (tasks executed in order) → `outcome-supported` (no circular deps) |
+   | **Change Validation** | Is there evidence the change works? | `present` (test files exist) → `wired` (tests run) → `exercised` (RED→GREEN observed) → `outcome-supported` (regression passes) |
+   | **Reliable Delivery** | Was the result accepted at the delivery boundary? | `present` (handoff exists) → `wired` (commit message ready) → `exercised` (human/CI accepted) → `outcome-supported` (deployed/merged) |
+   | **Learning Capture** | Can the next task benefit from this one? | `present` (handoff exists) → `wired` (sync works) → `exercised` (next agent used handoff) → `outcome-supported` (later task faster) |
+
+   **Score ceilings by evidence state:**
+   - `missing` / `unobserved` / `not-applicable` → max 59
+   - `present` → max 74
+   - `wired` → max 84
+   - `exercised` → max 94
+   - `outcome-supported` → max 100
+
+5. **Generate Findings** — for each dimension with evidence < `exercised`, create a finding:
+   ```json
+   {
+     "id": "F001",
+     "dimension": "change-validation",
+     "severity": "high|medium|low",
+     "evidence": "<what was observed>",
+     "impact": "<consequence>",
+     "repair": "<proposed fix>",
+     "verifier": "<how to verify>",
+     "status": "open"
+   }
+   ```
+   - Only emit findings for inspected gaps with bounded impact and repair route.
+   - Do NOT emit findings for `unobserved` external boundaries.
+   - Severity: `high` = blocks delivery, `medium` = degrades quality, `low` = improvement opportunity.
+
+6. Output review report:
    ```
    ## Review: <Feature Name>
 
@@ -423,10 +459,113 @@ Use when state.json gets out of sync with actual test results (e.g., process kil
    |-----------|------------|-------------|--------------|-------|
    | ...       | ✓/✗       | ✓/✗        | ✓/✗         | ✓/✗  |
 
+   ### Agent Work Loop Assessment
+   | Dimension | Evidence | Score | Finding |
+   |-----------|----------|-------|---------|
+   | Task Understanding | exercised | 85 | — |
+   | Controlled Execution | wired | 70 | F001 |
+   | Change Validation | outcome-supported | 95 | — |
+   | Reliable Delivery | present | 60 | F002 |
+   | Learning Capture | unobserved | 40 | — |
+
+   ### Findings
+   | ID | Dimension | Severity | Evidence | Repair |
+   |----|-----------|----------|----------|--------|
+   | F001 | controlled-execution | medium | Task 3 ran before Task 2 | Add dependency check |
+   | F002 | reliable-delivery | high | No commit message generated | Add commit step |
+
    ### Verdict
-   PASS / FAIL (N issues)
+   PASS / FAIL (N issues, M findings)
    ```
-5. Write to `docs/test-reports/<date>-<name>/review.md`.
+7. Write to `docs/test-reports/<date>-<name>/review.md`.
+8. Update `state.json` with review scores and findings.
+
+---
+
+## Command: `sean learn <name>`
+
+**Analyze historical test-reports to extract reusable patterns and lessons.**
+
+This command closes the Learning Capture loop by turning repeated observations into durable improvements.
+
+### Steps
+
+1. Scan all `docs/test-reports/<date>-<name>/` directories for this project.
+2. For each historical feature, extract:
+   - **Repeated failure patterns**: Same root cause appearing in 2+ features (e.g., "type mismatch in DTO", "missing import in test setup")
+   - **Repeated structural patterns**: Similar task decompositions that could become templates
+   - **Repeated decisions**: Same architectural choices made independently (e.g., "always use repository pattern for DB access")
+3. Generate `docs/team/lessons.md`:
+   ```markdown
+   # Lessons Learned
+
+   ## Recurring Failure Patterns
+   | Pattern | Features Affected | Root Cause | Prevention |
+   |---------|------------------|------------|------------|
+   | Type mismatch in DTO | comments, auth | Generated DTO doesn't match entity | Add DTO validation test |
+
+   ## Reusable Templates
+   | Template | Source Features | Applicability |
+   |----------|----------------|---------------|
+   | CRUD service pattern | comments, auth, audit | Any entity with standard CRUD |
+
+   ## Architectural Decisions
+   | Decision | Rationale | Applied In |
+   |----------|-----------|------------|
+   | Repository pattern for DB | Testability, swap implementations | comments, auth |
+
+   ## Suggested Convention Updates
+   - <convention 1>: <rationale>
+   - <convention 2>: <rationale>
+   ```
+4. If patterns suggest convention updates, propose them (do NOT auto-apply).
+5. Output: lessons file path + count of patterns found.
+
+---
+
+## Command: `sean findings [name]`
+
+**List and manage findings from the Agent Work Loop assessment.**
+
+### Steps
+
+1. If `[name]` not provided, read `active` from state.
+2. Read findings from `state.json` → `features.<name>.findings[]`.
+3. Output table:
+   ```
+   | ID | Dimension | Severity | Status | Evidence |
+   |----|-----------|----------|--------|----------|
+   | F001 | change-validation | high | open | Test 3 has assert True |
+   | F002 | reliable-delivery | medium | verified | No commit message |
+   ```
+4. If `--fix <id>` provided: mark finding as `verified` after confirming the repair.
+5. If `--detail <id>` provided: show full finding with repair and verifier.
+
+---
+
+## Command: `sean export <name> --format <format>`
+
+**Export sean workflow to other coding agent formats.**
+
+### Supported Formats
+
+| Format | Target | Output |
+|--------|--------|--------|
+| `claude-code` | Claude Code | `.claude/commands/sean.md` |
+| `cursor` | Cursor | `.cursorrules` |
+| `copilot` | GitHub Copilot | `.github/copilot-instructions.md` |
+| `codex` | Codex | `.codex/config.toml` |
+
+### Steps
+
+1. Read the sean SKILL.md content.
+2. Transform for target format:
+   - **claude-code**: Wrap in `/sean` slash command format
+   - **cursor**: Convert to rules format with frontmatter
+   - **copilot**: Convert to instructions format
+   - **codex**: Convert to TOML config with prompt
+3. Write to appropriate location in target project.
+4. Output: exported file path + format.
 
 ---
 
@@ -516,7 +655,9 @@ sean run <name> [--dry-run]      # 执行任务（TDD + 回归 + 交接文档）
 sean task <name> <n>             # 执行单个任务
 sean handoff <name>              # 生成交接文档（另一 AI 接手用）
 sean sync <name>                 # 从测试报告恢复状态（上下文丢失时用）
-sean review <name>               # 代码质量自审
+sean review <name>               # 五维评估 + 代码质量自审 + 发现生成
+sean learn <name>                # 从历史报告提取可复用模式（学习沉淀）
+sean findings [name]             # 查看/管理 Agent Work Loop 发现
 sean fix [name]                  # 修复最近失败的任务
 sean undo [name] [steps]         # 撤销操作（文件+状态）
 sean retry <name>                # 重试最近失败的任务
@@ -524,6 +665,7 @@ sean list                        # 列出所有功能
 sean status <name>               # 查看单个功能状态
 sean report [name] [--summary]   # 测试报告汇总
 sean switch <name>               # 切换当前活跃功能
+sean export <name> --format <f>  # 导出到其他 agent 格式
 sean clean [--keep-reports]      # 清理所有 sean 状态
 ```
 
@@ -549,7 +691,7 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 
 ```jsonc
 {
-  "version": 2,
+  "version": 3,
   "active": "<feature-name>",
   "features": {
     "<feature-name>": {
@@ -564,6 +706,7 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
           "id": 1,
           "name": "<task-name>",
           "status": "pending|in_progress|done|failed",
+          "evidence": "present|wired|exercised|outcome-supported|missing|unobserved",
           "tests_total": 0,
           "tests_passed": 0,
           "fixes": 0,
@@ -577,7 +720,26 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
       "tests_fixed": 0,
       "started_at": "<ISO8601>",
       "completed_at": null,
-      "blocked_reason": null
+      "blocked_reason": null,
+      "review": {
+        "task-understanding": { "score": 0, "evidence": "unobserved" },
+        "controlled-execution": { "score": 0, "evidence": "unobserved" },
+        "change-validation": { "score": 0, "evidence": "unobserved" },
+        "reliable-delivery": { "score": 0, "evidence": "unobserved" },
+        "learning-capture": { "score": 0, "evidence": "unobserved" }
+      },
+      "findings": [
+        {
+          "id": "F001",
+          "dimension": "change-validation",
+          "severity": "high|medium|low",
+          "evidence": "<what was observed>",
+          "impact": "<consequence>",
+          "repair": "<proposed fix>",
+          "verifier": "<how to verify>",
+          "status": "open|verified|partial|blocked"
+        }
+      ]
     }
   }
 }
@@ -614,6 +776,8 @@ Every time an AI agent finishes a `sean run`, it MUST self-certify:
 □ Handoff: handoff.md generated with status + next steps
 □ Commit: conventional commit message suggested
 □ State: state.json updated correctly
+□ Review: five-dimension assessment completed with evidence states
+□ Findings: all high-severity findings have repair plans
 ```
 
 If any checkbox cannot be ticked → do NOT mark as DONE. Mark as BLOCKED with reason.

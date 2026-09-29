@@ -15,7 +15,10 @@
 - **TDD 硬约束**：每个编码任务必须 RED→GREEN，禁止假测试
 - **自动修复**：测试失败自动分析根因、修复、重测（最多 3 轮）
 - **可撤销**：每次操作有快照，`sean undo` 即可回退
-- **自审**：`sean review` 检查代码质量是否符合团队规范
+- **五维评估**：`sean review` 基于 Agent Work Loop 五维模型评估工作流质量
+- **发现驱动**：`sean findings` 追踪问题根因，按优先级修复
+- **学习沉淀**：`sean learn` 从历史报告提取可复用模式
+- **多宿主**：`sean export` 导出到 Claude Code、Cursor、Copilot 等
 - **状态恢复**：进程被杀后 `sean sync` 从测试报告重建状态
 - **多项目独立**：状态存在项目的 `docs/.sean/`，切换自如
 
@@ -90,7 +93,9 @@ sean run comments         # 继续执行
 | `sean task <name> <N>` | 执行单个 task |
 | `sean handoff <name>` | 生成交接文档（另一 AI 接手用） |
 | `sean sync <name>` | 从测试报告恢复状态（上下文丢失时用） |
-| `sean review <name>` | 代码质量自审 |
+| `sean review <name>` | 五维评估 + 代码质量自审 + 发现生成 |
+| `sean learn <name>` | 从历史报告提取可复用模式（学习沉淀） |
+| `sean findings [name]` | 查看/管理 Agent Work Loop 发现 |
 | `sean fix [name]` | 修复最近失败的任务 |
 | `sean undo [name] [steps]` | 撤销操作 |
 | `sean retry <name>` | 重试最近失败的任务 |
@@ -98,6 +103,7 @@ sean run comments         # 继续执行
 | `sean status <name>` | 查看功能详情 |
 | `sean report [name] [--summary]` | 测试汇总 |
 | `sean switch <name>` | 切换激活功能 |
+| `sean export <name> --format <f>` | 导出到其他 agent 格式 |
 | `sean clean [--keep-reports]` | 清理状态 |
 
 ## 目录结构（项目中）
