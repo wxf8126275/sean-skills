@@ -1,7 +1,7 @@
 ---
 name: sean
 description: "AI-Native Team Development Workflow: standardizes how AI agents produce transferable knowledge — any AI can take over any other AI's work, even across context resets or model changes. Zero external dependencies."
-version: 3.2.0
+version: 3.3.0
 trigger: sean
 ---
 
@@ -215,6 +215,97 @@ When finishing a feature, the agent MUST produce:
 1. Load plan from `docs/plans/<date>-<name>.md`. Error if missing.
 2. Load state, resolve feature entry.
 3. Determine start task index (default 1, or `start_n`).
+4. **Parallel Detection**: Scan all tasks from `start_n` to end. If 2+ tasks have `parallel_safe: true` AND their `depends_on` are all `done` (or they have no unmet dependencies), present the user with a choice:
+   ```
+   ⚡ 检测到 N 个可并行任务: Task 2, 3, 5
+
+   是否启用子智能体并行执行？
+     是 — 并行分发，总耗时缩短，需额外上下文传递
+     否 — 串行执行（默认）
+   ```
+   - If user chooses **Yes** → proceed to Parallel Execution Protocol (see below).
+   - If user chooses **No** → proceed with serial execution (default behavior).
+   - If only 1 task is parallel_safe → skip the prompt, proceed serial.
+
+### Parallel Execution Protocol
+
+When user opts into parallel execution:
+
+1. **Group tasks** by dependency waves:
+   - Wave 1: Tasks with no unmet dependencies (all `depends_on` are `done` or empty).
+   - Wave 2: Tasks whose dependencies are all in Wave 1.
+   - Continue until all tasks are assigned to a wave.
+2. **Within each wave**, identify tasks with `parallel_safe: true` that can run concurrently.
+3. **Dispatch sub-agents** for concurrent tasks:
+   - Each sub-agent receives a **Task Context Package** (see below).
+   - Sub-agents run independently in isolated contexts.
+   - Sub-agents do NOT write `state.json` directly — they return structured results.
+4. **Collect results** from all sub-agents in the wave:
+   - Parse each sub-agent's output for the structured result.
+   - Update `state.json` with task status, tests passed/fixed, and report path.
+   - If any sub-agent reports `failed` → mark task as `failed`, apply Fix Loop policy.
+5. **Proceed to next wave** only after all tasks in current wave are resolved.
+6. **After all waves complete** → run Post-execution (regression, handoff, etc.).
+
+#### Task Context Package (for sub-agents)
+
+Each sub-agent MUST receive:
+
+```yaml
+task_id: <number>
+task_name: "<kebab-case-name>"
+project_root: "<absolute path>"
+conventions: "<full content of docs/team/conventions.md>"
+test_pattern: "<content of an existing test file for reference>"
+files_create: ["<path>", ...]
+files_modify: ["<path>", ...]
+test_file: "<path>"
+tdd_contract:
+  - "先写失败测试，确认 RED"
+  - "写最小实现使测试 GREEN"
+  - "禁止修改测试文件"
+  - "Fix Loop 最多 3 次"
+  - "如果 3 次后仍 RED → 返回 status: failed"
+output_format:
+  status: "done|failed"
+  tests_total: <number>
+  tests_passed: <number>
+  fixes: <number>
+  files_modified: ["<path>", ...]
+  report: "<path to test report>"
+  error_message: "<if failed>"
+```
+
+#### Sub-agent Result Contract
+
+Each sub-agent MUST return a JSON block at the end of its output:
+
+```json
+{
+  "task_id": 3,
+  "status": "done",
+  "tests_total": 4,
+  "tests_passed": 4,
+  "fixes": 1,
+  "files_modified": ["src/service.py"],
+  "report": "docs/test-reports/2026-09-29-myfeature/task-3-service.md",
+  "error_message": null
+}
+```
+
+If the sub-agent cannot complete the task, it returns:
+```json
+{
+  "task_id": 3,
+  "status": "failed",
+  "tests_total": 4,
+  "tests_passed": 2,
+  "fixes": 3,
+  "files_modified": ["src/service.py"],
+  "report": null,
+  "error_message": "ImportError: cannot import name 'foo' from 'bar'"
+}
+```
 
 ### If `--dry-run`
 
@@ -304,6 +395,69 @@ For each task from `start_n` to end:
 ## Command: `sean task <name> <n> [--dry-run] [--no-fix]`
 
 Same as `sean run` but only executes task `<n>`. Does not check dependencies (user's responsibility).
+
+---
+
+## Command: `sean dispatch <plan_path> [--start N] [--format json|yaml|text]`
+
+**解析 plan，分组 dependency waves，生成子智能体任务描述。**
+
+用于并行执行前的规划阶段。输出每个 wave 中哪些 task 可以并行、哪些必须串行。
+
+### Steps
+
+1. Parse plan markdown → Task objects (id, name, depends_on, parallel_safe, files, test_file).
+2. Group tasks into dependency waves:
+   - Wave 1: tasks with no unmet dependencies.
+   - Wave 2: tasks whose dependencies are all in Wave 1.
+   - Continue until all tasks assigned.
+3. Within each wave, split into `parallel_safe_tasks` and `serial_tasks`.
+4. For each parallel_safe task, generate a **Task Context Package** (YAML/JSON).
+5. Output in specified format (default: text).
+
+### Usage
+
+```bash
+# 查看 wave 分组（文本格式）
+python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md
+
+# JSON 格式（供程序消费）
+python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md --format json
+
+# 从 task 3 开始
+python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md --start 3
+
+# 带 conventions 和 test pattern
+python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md \
+  --conventions docs/team/conventions.md \
+  --test-pattern tests/test_existing.py
+```
+
+### Output Example (text)
+
+```
+=== Wave 1 ===
+  All tasks: [1]
+  Parallel safe: [1]
+  Serial: []
+
+  --- Task 1: db-schema ---
+  Creates: ['src/db/schema.py']
+  Modifies: []
+  Test: tests/test_schema.py
+  Acceptance: Schema creates table with correct columns
+
+=== Wave 2 ===
+  All tasks: [2, 3]
+  Parallel safe: [3]
+  Serial: [2]
+
+  --- Task 3: api-endpoints ---
+  Creates: ['src/api.py']
+  Modifies: []
+  Test: tests/test_api.py
+  Acceptance: API returns correct responses
+```
 
 ---
 
@@ -652,6 +806,8 @@ sean init <project>              # 首次初始化项目（生成规范+onboardi
 sean start <name> [desc...]      # 创建需求文档
 sean plan <name>                 # 拆解为 TDD 任务
 sean run <name> [--dry-run]      # 执行任务（TDD + 回归 + 交接文档）
+                                 # 有可并行 task 时会询问是否启用子智能体
+sean dispatch <plan> [--format]  # 解析 plan，分组 waves，生成子智能体任务描述
 sean task <name> <n>             # 执行单个任务
 sean handoff <name>              # 生成交接文档（另一 AI 接手用）
 sean sync <name>                 # 从测试报告恢复状态（上下文丢失时用）

@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/SKILL.md"
+SCRIPTS_SRC="$SCRIPT_DIR/scripts"
 INSTALL_DIR="${HOME}/.hermes/skills/your-skills/sean"
 mkdir -p "$INSTALL_DIR"
 
@@ -15,6 +16,13 @@ if [ ! -f "$SKILL_SRC" ]; then
 fi
 
 cp "$SKILL_SRC" "$INSTALL_DIR/SKILL.md"
+
+if [ -d "$SCRIPTS_SRC" ]; then
+    mkdir -p "$INSTALL_DIR/scripts"
+    cp "$SCRIPTS_SRC"/*.py "$INSTALL_DIR/scripts/" 2>/dev/null || true
+    echo "✅ scripts installed to $INSTALL_DIR/scripts"
+fi
+
 echo "✅ sean skill installed to $INSTALL_DIR"
 echo ""
 echo "Available commands:"
@@ -22,6 +30,8 @@ echo "  sean init <project>           - Initialize project (conventions + onboar
 echo "  sean start <name> [desc...]   - Create requirement"
 echo "  sean plan <name>              - Generate TDD plan"
 echo "  sean run <name> [--dry-run]   - Execute plan (TDD + regression + handoff)"
+echo "                                 (asks before spawning sub-agents for parallel tasks)"
+echo "  sean dispatch <plan> [--fmt]  - Group tasks into dependency waves for sub-agents"
 echo "  sean task <name> <N>          - Execute single task"
 echo "  sean handoff <name>           - Generate handoff document for next AI"
 echo "  sean sync <name>              - Recover state from test reports"

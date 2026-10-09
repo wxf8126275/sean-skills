@@ -21,6 +21,7 @@
 - **多宿主**：`sean export` 导出到 Claude Code、Cursor、Copilot 等
 - **状态恢复**：进程被杀后 `sean sync` 从测试报告重建状态
 - **多项目独立**：状态存在项目的 `docs/.sean/`，切换自如
+- **并行执行**：`sean run` 检测到可并行 task 时询问是否启用子智能体，按依赖 wave 分发
 
 ## 适用场景
 
@@ -89,7 +90,8 @@ sean run comments         # 继续执行
 | `sean init <project>` | 初始化项目（生成 conventions.md + onboarding.md） |
 | `sean start <name> [desc...]` | 创建需求文档 |
 | `sean plan <name>` | 生成 TDD 实现计划 |
-| `sean run <name> [N] [--dry-run] [--no-fix]` | 执行计划（含回归验证 + 交接文档） |
+| `sean run <name> [N] [--dry-run] [--no-fix]` | 执行计划（含回归验证 + 交接文档；有可并行 task 时询问是否启用子智能体） |
+| `sean dispatch <plan> [--start N] [--format json\|yaml\|text]` | 解析 plan，按依赖分组 wave，生成子智能体任务描述 |
 | `sean task <name> <N>` | 执行单个 task |
 | `sean handoff <name>` | 生成交接文档（另一 AI 接手用） |
 | `sean sync <name>` | 从测试报告恢复状态（上下文丢失时用） |
