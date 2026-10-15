@@ -22,6 +22,7 @@
 - **状态恢复**：进程被杀后 `sean sync` 从测试报告重建状态
 - **多项目独立**：状态存在项目的 `docs/.sean/`，切换自如
 - **并行执行**：`sean run` 检测到可并行 task 时询问是否启用子智能体，按依赖 wave 分发
+- **Bug 记录**：`sean bug` 捕获 run 后实测发现的 bug，强制补回归测试，handoff 标注信任等级
 
 ## 适用场景
 
@@ -99,6 +100,7 @@ sean run comments         # 继续执行
 | `sean learn <name>` | 从历史报告提取可复用模式（学习沉淀） |
 | `sean findings [name]` | 查看/管理 Agent Work Loop 发现 |
 | `sean fix [name]` | 修复最近失败的任务 |
+| `sean bug <name> [desc] [--task N] [--already-fixed --files f1,f2]` | 记录/修复 run 后实测发现的 bug（test-first） |
 | `sean undo [name] [steps]` | 撤销操作 |
 | `sean retry <name>` | 重试最近失败的任务 |
 | `sean list` | 列出所有功能状态 |
