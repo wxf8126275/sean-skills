@@ -39,6 +39,7 @@ echo "  sean review <name>            - Five-dimension assessment + code review 
 echo "  sean learn <name>             - Extract reusable patterns from history"
 echo "  sean findings [name]          - View/manage Agent Work Loop findings"
 echo "  sean fix [name]               - Fix recent failure"
+echo "  sean bug <name> [desc]       - Record/fix post-run bug (test-first)"
 echo "  sean undo [name] [steps]      - Undo last operation"
 echo "  sean retry <name>             - Retry recent failure"
 echo "  sean list                     - List all features"

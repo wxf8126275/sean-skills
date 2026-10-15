@@ -1,7 +1,7 @@
 ---
 name: sean
 description: "AI-Native Team Development Workflow: standardizes how AI agents produce transferable knowledge — any AI can take over any other AI's work, even across context resets or model changes. Zero external dependencies."
-version: 3.3.0
+version: 3.4.0
 trigger: sean
 ---
 
@@ -486,11 +486,20 @@ python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md \
    - Tasks completed: N / Total
    - Last updated: <ISO8601>
 
+   ## Reliability
+   - Implemented by: <model-id> (<provider>)
+   - Task first-pass rate: N/M (tasks that passed without fix loop)
+   - Post-run bugs: N (found by: user-manual | production)
+   - Trust level: HIGH | MEDIUM | LOW
+     - HIGH: all bugs caught by task tests or regression
+     - MEDIUM: 1-2 bugs found by user-manual, all fixed with regression tests
+     - LOW: 3+ bugs or any production-found bug — recommend independent verification
+
    ## What Was Done
-   | Task | Status | Summary |
-   |------|--------|---------|
-   | 1    | done   | <what it does> |
-   | 2    | failed | <what it does> |
+   | Task | Status | Summary | Implemented By |
+   |------|--------|---------|----------------|
+   | 1    | done   | <what it does> | <model-id> |
+   | 2    | failed | <what it does> | <model-id> |
 
    ## File Inventory (verified on disk)
 
@@ -502,6 +511,11 @@ python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md \
 
    ### Tests
    - `<path>` — <behavior covered>
+
+   ## Post-Run Bugs (if any)
+   | ID | Symptom | Classification | Found By | Status | Regression Test |
+   |----|---------|----------------|----------|--------|-----------------|
+   | B001 | <symptom> | implementation | user-manual | fixed | `test_name` |
 
    ## Current Blocker (if any)
    - <why blocked + what was tried>
@@ -519,6 +533,7 @@ python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md \
    sean status <name>        # check current state
    sean run <name>           # resume full run (if BLOCKED)
    sean task <name> N        # run specific task
+   sean bug <name> "desc"    # record a post-run bug
    <test command>             # e.g. pytest tests/ -v
    ```
    ```
@@ -735,6 +750,124 @@ This command closes the Learning Capture loop by turning repeated observations i
 
 ---
 
+## Command: `sean bug <name> [description...] [--task N] [--already-fixed --files <f1,f2>]`
+
+**记录并修复 `sean run` 完成后用户实测发现的 bug。**
+
+这是 sean 的知识传承链中**唯一能捕获「测试没拦住、用户实测才发现」的缺陷**的入口。不记录的话，`sean sync`/`sean learn` 会把状态「恢复」成干净的 DONE，下一个 AI 完全不知道这个 bug 曾经存在。
+
+### 两种模式
+
+| 模式 | 触发 | 行为 |
+|------|------|------|
+| **主动式**（默认） | `sean bug <name> "描述"` | sean 驱动 TDD 修复：写复现测试→RED→修实现→GREEN→记录 |
+| **追溯式** | `sean bug <name> "描述" --already-fixed --files src/foo.py` | 用户已在对话里修好了，sean 只补记录+补回归测试+强制跑一遍 |
+
+### 设计原则
+
+- **不重开 task**：task 确实完成了它声明的行为。bug 作为 feature 级独立条目挂在 `bugs[]`，用 `task_id` 反向关联。重开会让「已完成」的历史变模糊。
+- **回归测试落点**：追加到原 `test_file`（同模块测试放一起）。
+- **test-first 铁律**：bug 修复也必须先写复现测试。没有复现测试就不许标记修复完成。
+
+### Steps
+
+1. **Parse arguments**:
+   - `<name>`: feature name.
+   - `[description...]`: bug 症状描述（一句话）。
+   - `--task N`: 关联的 task id（可选，用于反向定位）。
+   - `--already-fixed`: 追溯模式标志。
+   - `--files <f1,f2>`: 追溯模式下，用户已修改的文件列表。
+2. **Load state**, find feature. Error if not found.
+3. **Classify bug**:
+   - **implementation**: 代码没做到 task 的 `acceptance` 说的 → 实现缺陷。
+   - **spec-gap**: 代码做到了 AI 理解的，但用户要的是别的 → 需求文档修正。
+   - 如果 `--task N` 提供，读该 task 的 `acceptance` 帮助分类。
+4. **Record bug** in `state.json` → `features.<name>.bugs[]`:
+   ```json
+   {
+     "id": "B001",
+     "task_id": 3,
+     "classification": "implementation|spec-gap",
+     "symptom": "<user description>",
+     "root_cause": null,
+     "found_by": "user-manual|production",
+     "status": "open|fixing|fixed|wontfix",
+     "regression_test": null,
+     "fixed_by": null,
+     "files_modified": [],
+     "created_at": "<ISO8601>",
+     "resolved_at": null
+   }
+   ```
+5. **Write bug report** to `docs/test-reports/<date>-<name>/bugs.md`:
+   ```markdown
+   # Bugs: <Feature Name>
+
+   ## B001: <symptom>
+
+   - **Classification**: implementation | spec-gap
+   - **Task**: 3 (api-endpoints)
+   - **Found by**: user-manual
+   - **Status**: open
+
+   ### Symptom
+   <user description>
+
+   ### Reproduction
+   1. <step 1>
+   2. <step 2>
+
+   ### Root Cause
+   <to be filled during fixing>
+
+   ### Fix
+   <to be filled during fixing>
+
+   ### Regression Test
+   <to be filled during fixing — test name + file>
+   ```
+6. **If 追溯模式** (`--already-fixed`):
+   - Verify the fix: run the feature's full test suite.
+   - **Write regression test**: append to the task's `test_file`. The test MUST reproduce the original bug (verify it would have failed before the fix).
+   - Run the regression test → must PASS.
+   - Update bug entry: `status: "fixed"`, `regression_test: "<test name>"`, `files_modified: [--files]`, `fixed_by: "<agent model>"`.
+   - Update `bugs.md` with root cause + fix + regression test.
+   - Save history snapshot (`action: "bug"`).
+   - Output: bug recorded + regression test added.
+7. **If 主动模式** (default):
+   - **Write reproducing test**: append to the task's `test_file`. Test MUST FAIL (RED) — this proves it reproduces the bug.
+   - Run test → confirm RED.
+   - **Fix implementation** (NEVER the test).
+   - Run test → must PASS (GREEN).
+   - Run full feature regression → must PASS.
+   - Update bug entry: `status: "fixed"`, `regression_test`, `root_cause`, `fixed_by`, `files_modified`.
+   - Update `bugs.md` with all sections filled.
+   - Save history snapshot (`action: "bug"`).
+   - Output: bug fixed + regression test added.
+8. **If spec-gap classification**:
+   - Also update `docs/requirements/<date>-<name>.md` — correct the requirement so the next AI doesn't repeat the same misunderstanding.
+   - Flag the requirement diff in `bugs.md`.
+9. **Update feature status**:
+   - If any bug `status: "open"` or `"fixing"` → feature `status` must NOT be `DONE`. Set to `IN_PROGRESS` or add `post_done_bugs` count.
+   - Only when all bugs are `fixed` or `wontfix` → feature can return to `DONE`.
+10. **Update handoff.md** — add Reliability section (see `sean handoff`).
+11. **Output**: bug id, classification, status, regression test path, next step.
+
+### Usage
+
+```bash
+# 主动式：描述 bug，sean 驱动 TDD 修复
+sean bug auth "登录后刷新页面跳回登录页" --task 3
+
+# 追溯式：已在对话里修好了，补记录+补回归测试
+sean bug auth "登录后刷新页面跳回登录页" --already-fixed --files src/auth.py
+
+# 多文件修改
+sean bug api "分页参数不生效" --already-fixed --files src/api.py,src/service.py
+```
+
+---
+
 ## Command: `sean undo [name] [steps]`
 
 1. If `[name]` not provided, read `active`.
@@ -815,6 +948,8 @@ sean review <name>               # 五维评估 + 代码质量自审 + 发现生
 sean learn <name>                # 从历史报告提取可复用模式（学习沉淀）
 sean findings [name]             # 查看/管理 Agent Work Loop 发现
 sean fix [name]                  # 修复最近失败的任务
+sean bug <name> [desc] [--task N] [--already-fixed --files f1,f2]
+                                 # 记录/修复 run 后实测发现的 bug（test-first）
 sean undo [name] [steps]         # 撤销操作（文件+状态）
 sean retry <name>                # 重试最近失败的任务
 sean list                        # 列出所有功能
@@ -840,6 +975,8 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 | No failed report | `没有失败的测试报告` | — |
 | Nothing to undo | `没有可撤销的操作` | — |
 | Invalid name | `名称非法: 仅小写字母/数字/连字符` | — |
+| Bug already fixed | `bug <id> 已修复，无需重复操作` | — |
+| Bug not found | `bug <id> 不存在。现有: <list>` | — |
 
 ---
 
@@ -847,8 +984,12 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 
 ```jsonc
 {
-  "version": 3,
+  "version": 4,
   "active": "<feature-name>",
+  "agent": {
+    "model": "<model-id>",
+    "provider": "<provider>"
+  },
   "features": {
     "<feature-name>": {
       "name": "<feature-name>",
@@ -868,7 +1009,8 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
           "fixes": 0,
           "complexity": "low|medium|high",
           "parallel_safe": true,
-          "report": "<path>"
+          "report": "<path>",
+          "implemented_by": "<model-id>"
         }
       ],
       "tests_passed": 0,
@@ -895,6 +1037,22 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
           "verifier": "<how to verify>",
           "status": "open|verified|partial|blocked"
         }
+      ],
+      "bugs": [
+        {
+          "id": "B001",
+          "task_id": 3,
+          "classification": "implementation|spec-gap",
+          "symptom": "<user description>",
+          "root_cause": "<root cause>",
+          "found_by": "task-test|regression|review|user-manual|production",
+          "status": "open|fixing|fixed|wontfix",
+          "regression_test": "<test name>",
+          "fixed_by": "<model-id>",
+          "files_modified": ["<path>"],
+          "created_at": "<ISO8601>",
+          "resolved_at": "<ISO8601>"
+        }
       ]
     }
   }
@@ -906,7 +1064,7 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 ```jsonc
 {
   "timestamp": "<ISO8601>",
-  "action": "start|plan|run|task|fix|review",
+  "action": "start|plan|run|task|fix|bug|review",
   "feature": "<name>",
   "before": { /* complete state.json snapshot */ },
   "after": { /* complete state.json snapshot */ },
@@ -934,6 +1092,7 @@ Every time an AI agent finishes a `sean run`, it MUST self-certify:
 □ State: state.json updated correctly
 □ Review: five-dimension assessment completed with evidence states
 □ Findings: all high-severity findings have repair plans
+□ Bugs: post-run bugs recorded with regression tests (bugs.md + state.json bugs[])
 ```
 
 If any checkbox cannot be ticked → do NOT mark as DONE. Mark as BLOCKED with reason.
