@@ -19,6 +19,9 @@ Task 1 → Task 3
 ### Task 1: {{name}}
 
 - **Creates**: `{{files_create}}`
+- **Artifacts**:
+  - `{{path}}` (database, {{purpose}})
+  - `{{path}}` (batch, {{purpose}})
 - **Modifies**: `{{files_modify}}`
 - **Test**: `{{test_file}}`
 - **Acceptance**: {{criteria}}
@@ -27,8 +30,9 @@ Task 1 → Task 3
 1. Write failing test: `{{test_description}}`
 2. Run → confirm RED
 3. Write minimal implementation
-4. Run → confirm GREEN
-5. Self-review (conventions compliance)
+4. Create artifacts declared above (add reverse-reference header)
+5. Run → confirm GREEN
+6. Self-review (conventions compliance)
 
 **Depends on**: {{depends_on}}
 
