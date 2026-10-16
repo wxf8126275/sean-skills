@@ -1,7 +1,7 @@
 ---
 name: sean
 description: "AI-Native Team Development Workflow: standardizes how AI agents produce transferable knowledge — any AI can take over any other AI's work, even across context resets or model changes. Zero external dependencies."
-version: 3.4.0
+version: 3.5.0
 trigger: sean
 ---
 
@@ -35,9 +35,12 @@ Activated when user input starts with `sean ` (case-insensitive).
 │   │   └── <YYYY-MM-DD>-<feature>.md
 │   ├── plans/
 │   │   └── <YYYY-MM-DD>-<feature>.md
+│   ├── artifacts/
+│   │   └── <YYYY-MM-DD>-<feature>.md      ← 产物索引（非容器）
 │   ├── test-reports/
 │   │   └── <YYYY-MM-DD>-<feature>/
 │   │       ├── task-N-<name>.md
+│   │       ├── bugs.md
 │   │       ├── summary.md
 │   │       ├── handoff.md
 │   │       └── review.md
@@ -49,7 +52,28 @@ Activated when user input starts with `sean ` (case-insensitive).
 │       ├── active
 │       └── history/
 │           └── <timestamp>-<action>.json
+├── migrations/                             ← 产物留项目标准位置
+├── scripts/                                ← 产物留项目标准位置
+└── config/                                 ← 产物留项目标准位置
 ```
+
+**产物目录是索引，不是容器。** 数据库脚本、批处理命令、配置模板留在项目自己的标准位置（`migrations/`、`scripts/`、`config/`），`docs/artifacts/` 只记录它们的存在、归属和状态。理由：这些是可执行产物，项目运行时 / CI / 部署流程按标准路径查找，移进 docs 会破坏项目约定。
+
+## Artifact Types
+
+| Type | 例子 | 标准位置 | 消费者 |
+|------|------|---------|--------|
+| `database` | 迁移脚本、建表 SQL、索引脚本 | `migrations/` | 运行时 / CI |
+| `batch` | 初始化脚本、数据导入、清理命令 | `scripts/` | 人 / CI 手动执行 |
+| `config` | 配置模板、环境变量模板 | `config/` | 部署流程 |
+
+每个产物有三个独立状态维度：
+
+- **`status`** — 文件是否已创建：`declared` → `created` → `failed`
+- **`executed`** — 是否被真实执行过（脚本跑过、迁移应用过）
+- **`verified`** — 执行结果是否被验证过
+
+三者分离，因为「脚本被创建」≠「脚本被执行」≠「执行结果正确」。
 
 ---
 
@@ -122,7 +146,11 @@ When finishing a feature, the agent MUST produce:
      - "这个功能解决什么问题？（一句话）"
      - "关键行为是什么？（逗号分隔）"
      - "验收标准是什么？（逗号分隔）"
-4. **Create requirement file** at `docs/requirements/<date>-<name>.md`:
+4. **Ask about non-code artifacts** (one question):
+   - "这个需求会产生非代码产物吗？（数据库脚本 / 批处理命令 / 配置文件）"
+   - If yes: ask which types, and record in `Artifacts (expected)` section.
+   - This is a business decision — do NOT let the AI infer it silently.
+5. **Create requirement file** at `docs/requirements/<date>-<name>.md`:
    ```markdown
    # <Feature Name>
 
@@ -137,15 +165,24 @@ When finishing a feature, the agent MUST produce:
    - <criterion 1> → verifiable by <test/manual/demo>
    - <criterion 2> → verifiable by <test/manual/demo>
 
+   ## Artifacts (expected)
+
+   > 需求文档只声明**需要什么类型**的产物，不声明具体路径。
+   > 具体路径由 `sean plan` 决定，索引写入 `docs/artifacts/<date>-<feature>.md`。
+
+   - **Database**: <db_scripts>
+   - **Batch**: <batch_scripts>
+   - **Config**: <config_files>
+
    ## Context
    - Tech stack: <inferred or stated>
    - Related features: <list known dependencies>
    - Constraints: <performance/security/compat constraints>
    - Non-goals: <what this feature explicitly does NOT do>
    ```
-5. **Update state**: create entry in `state.json` → `features.<name>` with `status: "DRAFT"`. Set `active`.
-6. **Save history**: Record `start` action snapshot.
-7. **Output**: file path, status, next step (`sean plan <name>`).
+6. **Update state**: create entry in `state.json` → `features.<name>` with `status: "DRAFT"`. Set `active`.
+7. **Save history**: Record `start` action snapshot.
+8. **Output**: file path, status, next step (`sean plan <name>`).
 
 ---
 
@@ -167,6 +204,7 @@ When finishing a feature, the agent MUST produce:
    - `id`: sequential number
    - `name`: short kebab-case identifier
    - `files_create`: exact file paths to create
+   - `artifacts`: non-code products this task produces (type + path + purpose)
    - `files_modify`: existing files to modify
    - `test_file`: exact test file path
    - `steps`: ordered TDD steps (red → green → verify)
@@ -174,8 +212,15 @@ When finishing a feature, the agent MUST produce:
    - `depends_on`: list of task ids (or empty)
    - `estimated_complexity`: `low` | `medium` | `high`
    - `parallel_safe`: boolean (can run concurrently with other tasks?)
-6. **Validate**: no circular dependencies, all tasks have unique names.
-7. **Write plan** to `docs/plans/<date>-<name>.md`:
+6. **Derive artifact paths from the requirement's `Artifacts (expected)`**:
+   - Read the requirement's `Artifacts (expected)` section.
+   - For each declared type, assign the concrete path following the project's own conventions (check `AGENTS.md` / existing dirs).
+   - `database` → `migrations/<NNN>_<slug>.sql`
+   - `batch` → `scripts/<slug>.sh`
+   - `config` → `config/<slug>.template`
+   - Do NOT invent paths if the project has no established convention — ask.
+7. **Validate**: no circular dependencies, all tasks have unique names.
+8. **Write plan** to `docs/plans/<date>-<name>.md`:
    ```markdown
    # Plan: <Feature Name>
 
@@ -198,13 +243,16 @@ When finishing a feature, the agent MUST produce:
 
    ### Task 1: <name>
    - **Creates**: `<files>`
+   - **Artifacts**:
+     - `migrations/001_create_users.sql` (database, 用户表结构)
+     - `scripts/init_admin.sh` (batch, 初始化管理员账号)
    - **Modifies**: `<files>`
    - **Test**: `<path>`
    - **Acceptance**: <criteria>
    ```
-8. **Update state**: `status: "PLANNED"`, `tasks_total`, initialize `tasks[]` with complexity and parallel_safe fields.
-9. **Save history**: Record `plan` action.
-10. **Output**: task list summary, next step (`sean run <name> --dry-run`).
+9. **Update state**: `status: "PLANNED"`, `tasks_total`, initialize `tasks[]` with complexity, parallel_safe, and `artifacts[]` (status: `declared`).
+10. **Save history**: Record `plan` action.
+11. **Output**: task list summary, next step (`sean run <name> --dry-run`).
 
 ---
 
@@ -342,8 +390,20 @@ For each task from `start_n` to end:
    - **RED Confirmation**: Log the exact assertion that failed and WHY (this proves the test exercises new behavior).
    - If the test file is empty or doesn't exist → write it properly before re-running.
 6. **Write minimal implementation** to make the test pass.
-7. **Run test** again. Expected PASS/GREEN.
-8. **If GREEN**:
+7. **Create declared artifacts** (if the task declares `artifacts`):
+   - For each entry in `artifacts`, write the file at the declared path.
+   - **Every artifact file MUST carry a reverse-reference header**:
+     ```
+     -- Requirement: <feature> (docs/requirements/<date>-<name>.md)
+     -- Task: <id> (<task-name>)
+     -- Generated by: sean run
+     -- Catalog: docs/artifacts/<date>-<name>.md
+     ```
+     (Use `#` for shell scripts, `--` for SQL.)
+   - Update each artifact's `status` in state: `declared` → `created`.
+   - Do NOT auto-execute the artifact. Execution is a separate, explicit action.
+8. **Run test** again. Expected PASS/GREEN.
+9. **If GREEN**:
    - **Verify test actually exercised the behavior**: Re-read the test file and confirm assertions are meaningful (not trivially passing).
    - **Re-run from scratch** (fresh process): Confirm it still passes cleanly (no warnings-as-errors, no skipped tests).
    - **Self-review** the implementation against conventions:
@@ -354,7 +414,7 @@ For each task from `start_n` to end:
    - Write test report.
    - Mark task `status: "done"`.
    - Continue to next task.
-9. **If RED** (implementation fails):
+10. **If RED** (implementation fails):
    - **`--no-fix`**: Mark task `status: "failed"`, STOP. Output failure details.
    - **Default (auto-fix)**: Enter Fix Loop:
      ```
@@ -370,14 +430,20 @@ For each task from `start_n` to end:
      ```
    - After 3 attempts (or early break on same root cause) still RED: Mark task `status: "failed"`, STOP.
    - **Fix quality gate**: After fix, re-read the diff and confirm the fix addresses the root cause (not just silencing the error).
-10. **Check consecutive failures**: If 2 consecutive tasks failed, ABORT entire run. Output blocker report.
+11. **Check consecutive failures**: If 2 consecutive tasks failed, ABORT entire run. Output blocker report.
 
 #### Post-execution (Knowledge Handoff)
 
 1. **End-to-end regression**: Run ALL test files for this feature in one command (e.g. `pytest <test_dir>/ -v`).
    - If any test fails despite individual task GREEN → mark overall `INTEGRATION_FAIL` and list conflicts.
-2. **Handoff Summary** — generate `docs/test-reports/<date>-<feature>/handoff.md` (see `sean handoff` for format).
-3. **Suggested Commit Message** (conventional format):
+2. **Generate artifact catalog** at `docs/artifacts/<date>-<feature>.md`:
+   - Collect all `artifacts[]` from all tasks in this feature.
+   - Group by type (`database` / `batch` / `config`).
+   - Record `status` / `executed` / `verified` for each.
+   - Append an Execution Log section (empty until something is executed).
+   - If the catalog already exists, merge — do not overwrite (preserve Execution Log entries).
+3. **Handoff Summary** — generate `docs/test-reports/<date>-<feature>/handoff.md` (see `sean handoff` for format).
+4. **Suggested Commit Message** (conventional format):
    ```
    feat(<scope>): implement <feature-name>
 
@@ -386,9 +452,10 @@ For each task from `start_n` to end:
 
    Tests: N passed
    Regression: passed
+   Artifacts: N database, N batch, N config
    ```
-4. **Update state**: `current_task`, overall status (`DONE` only if all individual + regression pass, `BLOCKED` or `INTEGRATION_FAIL` if failed).
-5. **Output final report**: per-task status + regression status + commit suggestion + handoff path.
+5. **Update state**: `current_task`, overall status (`DONE` only if all individual + regression pass, `BLOCKED` or `INTEGRATION_FAIL` if failed).
+6. **Output final report**: per-task status + regression status + artifact count + commit suggestion + handoff path.
 
 ---
 
@@ -512,6 +579,16 @@ python3 scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md \
    ### Tests
    - `<path>` — <behavior covered>
 
+   ## Artifacts (non-code products)
+   - Catalog: `docs/artifacts/<date>-<name>.md`
+
+   | Path | Type | Task | Status | Executed | Verified |
+   |------|------|------|--------|----------|----------|
+   | `<path>` | database | 1 | created | ✅ | ✅ |
+   | `<path>` | batch | 1 | created | ⬜ | ⬜ |
+
+   > 产物留在项目标准位置（`migrations/`、`scripts/`、`config/`），本表是索引。
+
    ## Post-Run Bugs (if any)
    | ID | Symptom | Classification | Found By | Status | Regression Test |
    |----|---------|----------------|----------|--------|-----------------|
@@ -550,13 +627,19 @@ Use when state.json gets out of sync with actual test results (e.g., process kil
 ### Steps
 
 1. Scan `docs/test-reports/<date>-<name>/` for all `task-*.md` files.
-2. Re-derive each task's status from report content:
+2. Scan `docs/artifacts/<date>-<name>.md` for the artifact catalog.
+3. Re-derive each task's status from report content:
    - Report exists and says "PASS" → `done`
    - Report exists and says "FAIL" → `failed`
    - No report → `pending`
-3. Rebuild state from reports.
-4. Output diff between old state and new state.
-5. Ask before overwriting.
+4. Re-derive each artifact's status from the catalog:
+   - Catalog exists and lists the artifact with `status: created` → `created`
+   - Catalog lists it with `executed: true` → `executed: true`
+   - Catalog lists it with `verified: true` → `verified: true`
+   - Artifact declared in plan but absent from catalog → `declared`
+5. Rebuild state from reports + catalog.
+6. Output diff between old state and new state.
+7. Ask before overwriting.
 
 ---
 
@@ -660,11 +743,13 @@ This command closes the Learning Capture loop by turning repeated observations i
 ### Steps
 
 1. Scan all `docs/test-reports/<date>-<name>/` directories for this project.
-2. For each historical feature, extract:
+2. Scan all `docs/artifacts/<date>-<name>.md` catalogs for this project.
+3. For each historical feature, extract:
    - **Repeated failure patterns**: Same root cause appearing in 2+ features (e.g., "type mismatch in DTO", "missing import in test setup")
    - **Repeated structural patterns**: Similar task decompositions that could become templates
    - **Repeated decisions**: Same architectural choices made independently (e.g., "always use repository pattern for DB access")
-3. Generate `docs/team/lessons.md`:
+   - **Artifact patterns**: Which artifact types recur for which feature types (e.g., "auth features always need a JWT config template"), and which artifacts are most often executed-but-not-verified
+4. Generate `docs/team/lessons.md`:
    ```markdown
    # Lessons Learned
 
@@ -678,9 +763,15 @@ This command closes the Learning Capture loop by turning repeated observations i
    |----------|----------------|---------------|
    | CRUD service pattern | comments, auth, audit | Any entity with standard CRUD |
 
+   ## Artifact Patterns
+   | Feature Type | Artifacts Produced | Most Often Unverified |
+   |--------------|--------------------|-----------------------|
+   | auth | database, config | config template |
+   | admin-panel | database, batch | batch script |
+
    ## Architectural Decisions
    | Decision | Rationale | Applied In |
-   |----------|-----------|------------|
+   |----------|-----------|-----------|
    | Repository pattern for DB | Testability, swap implementations | comments, auth |
 
    ## Suggested Convention Updates
@@ -868,12 +959,59 @@ sean bug api "分页参数不生效" --already-fixed --files src/api.py,src/serv
 
 ---
 
+## Command: `sean artifact <name> <action> [path]`
+
+**执行或验证产物脚本，并把结果写回 catalog。**
+
+产物（迁移脚本、批处理命令）在 `sean run` 时只被**创建**，不被执行。执行是独立动作——因为执行可能改变数据库状态，需要人确认。
+
+### Actions
+
+| Action | 行为 |
+|--------|------|
+| `list` | 列出该 feature 的所有产物（按类型分组），显示 status / executed / verified |
+| `run <path>` | 执行单个产物，把结果写入 catalog 的 Execution Log |
+| `verify <path>` | 验证产物执行结果（跑一次并检查预期副作用） |
+| `mark <path> --executed --verified` | 手动标记状态（脚本已在别处执行过时） |
+
+### Steps
+
+1. Read state, find feature. Error if not found.
+2. Read the catalog at `docs/artifacts/<date>-<name>.md`. Error if missing → suggest `sean run`.
+3. **For `list`**: print the catalog table grouped by type.
+4. **For `run <path>`**:
+   - Find the artifact in `state.json` → `tasks[].artifacts[]`. Error if not declared.
+   - **Confirm before executing** — the artifact may mutate database state.
+   - Execute via the project's own tooling (check `AGENTS.md`; e.g. `alembic upgrade head`, `psql -f`, `bash`).
+   - Capture stdout/stderr + exit code.
+   - Update catalog: `executed: true`, append Execution Log entry.
+   - Update state: `artifacts[].executed = true`.
+   - If exit code != 0 → `status: "failed"`, STOP and report.
+5. **For `verify <path>`**:
+   - Check the expected side effect actually happened (e.g. table exists, row inserted).
+   - Update `verified: true` in catalog + state.
+6. **For `mark`**: update fields as specified, no execution.
+7. Save history snapshot (`action: "artifact"`).
+8. Output: artifact path + action + result.
+
+### Usage
+
+```bash
+sean artifact auth list
+sean artifact auth run migrations/001_create_users.sql
+sean artifact auth verify migrations/001_create_users.sql
+sean artifact auth mark scripts/init_admin.sh --executed --verified
+```
+
+---
+
 ## Command: `sean undo [name] [steps]`
 
 1. If `[name]` not provided, read `active`.
 2. `steps` default = 1.
 3. Find most recent `undone: false` history entry.
-4. **Restore**: delete `files_created`, restore `files_modified` from snapshot or git.
+4. **Restore**: delete `files_created`, delete `artifacts[]` declared files, restore `files_modified` from snapshot or git.
+   - **Artifact safety check**: if an artifact has `executed: true`, do NOT delete it silently. Report it and ask — deleting an executed migration script while the DB still has the change creates an inconsistent state. Prefer `sean undo` reverting only the file, and note that the DB state is untouched.
 5. **Restore state** from snapshot.
 6. Mark history entry `undone: true`.
 7. If `steps > 1`: repeat.
@@ -950,6 +1088,7 @@ sean findings [name]             # 查看/管理 Agent Work Loop 发现
 sean fix [name]                  # 修复最近失败的任务
 sean bug <name> [desc] [--task N] [--already-fixed --files f1,f2]
                                  # 记录/修复 run 后实测发现的 bug（test-first）
+sean artifact <name> <action>    # 执行/验证产物脚本（list|run|verify|mark）
 sean undo [name] [steps]         # 撤销操作（文件+状态）
 sean retry <name>                # 重试最近失败的任务
 sean list                        # 列出所有功能
@@ -977,6 +1116,9 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 | Invalid name | `名称非法: 仅小写字母/数字/连字符` | — |
 | Bug already fixed | `bug <id> 已修复，无需重复操作` | — |
 | Bug not found | `bug <id> 不存在。现有: <list>` | — |
+| Artifact not declared | `产物 <path> 未在 plan 中声明` | Suggest `sean plan` |
+| Artifact catalog missing | `产物目录不存在。运行: sean run <name>` | — |
+| Artifact executed, cannot undo | `产物 <path> 已执行，删除会造成状态不一致` | Ask before deleting |
 
 ---
 
@@ -1010,7 +1152,19 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
           "complexity": "low|medium|high",
           "parallel_safe": true,
           "report": "<path>",
-          "implemented_by": "<model-id>"
+          "implemented_by": "<model-id>",
+          "artifacts": [
+            {
+              "path": "migrations/001_create_users.sql",
+              "type": "database",
+              "purpose": "用户表结构",
+              "requirement_ref": "auth-feature",
+              "catalog": "docs/artifacts/2026-09-29-auth.md",
+              "status": "declared|created|failed",
+              "executed": false,
+              "verified": false
+            }
+          ]
         }
       ],
       "tests_passed": 0,
@@ -1064,7 +1218,7 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 ```jsonc
 {
   "timestamp": "<ISO8601>",
-  "action": "start|plan|run|task|fix|bug|review",
+  "action": "start|plan|run|task|fix|bug|artifact|review",
   "feature": "<name>",
   "before": { /* complete state.json snapshot */ },
   "after": { /* complete state.json snapshot */ },
@@ -1093,6 +1247,7 @@ Every time an AI agent finishes a `sean run`, it MUST self-certify:
 □ Review: five-dimension assessment completed with evidence states
 □ Findings: all high-severity findings have repair plans
 □ Bugs: post-run bugs recorded with regression tests (bugs.md + state.json bugs[])
+□ Artifacts: catalog generated at docs/artifacts/<date>-<feature>.md; every artifact file carries a reverse-reference header
 ```
 
 If any checkbox cannot be ticked → do NOT mark as DONE. Mark as BLOCKED with reason.
