@@ -959,19 +959,33 @@ sean bug api "分页参数不生效" --already-fixed --files src/api.py,src/serv
 
 ---
 
-## Command: `sean artifact <name> <action> [path]`
+## Command: `sean artifact <name> <action> [path] [--execute]`
 
 **执行或验证产物脚本，并把结果写回 catalog。**
 
 产物（迁移脚本、批处理命令）在 `sean run` 时只被**创建**，不被执行。执行是独立动作——因为执行可能改变数据库状态，需要人确认。
+
+### Safety Gate: dry-run by default
+
+**`run` 默认是 dry-run。不传 `--execute` 就绝不碰真实环境。**
+
+```
+sean artifact auth run migrations/001_create_users.sql
+  → DRY-RUN: 只显示将要执行什么，不执行
+
+sean artifact auth run migrations/001_create_users.sql --execute
+  → 真正执行，需要显式确认
+```
+
+理由：数据库脚本执行后可能不可逆（DROP TABLE、DELETE）。一个 `--execute` 拼错或漏传，代价远高于多敲一次参数。
 
 ### Actions
 
 | Action | 行为 |
 |--------|------|
 | `list` | 列出该 feature 的所有产物（按类型分组），显示 status / executed / verified |
-| `run <path>` | 执行单个产物，把结果写入 catalog 的 Execution Log |
-| `verify <path>` | 验证产物执行结果（跑一次并检查预期副作用） |
+| `run <path> [--execute]` | dry-run（默认）或执行单个产物，结果写入 catalog 的 Execution Log |
+| `verify <path> [--execute]` | 验证产物执行结果（检查预期副作用） |
 | `mark <path> --executed --verified` | 手动标记状态（脚本已在别处执行过时） |
 
 ### Steps
@@ -981,25 +995,41 @@ sean bug api "分页参数不生效" --already-fixed --files src/api.py,src/serv
 3. **For `list`**: print the catalog table grouped by type.
 4. **For `run <path>`**:
    - Find the artifact in `state.json` → `tasks[].artifacts[]`. Error if not declared.
-   - **Confirm before executing** — the artifact may mutate database state.
-   - Execute via the project's own tooling (check `AGENTS.md`; e.g. `alembic upgrade head`, `psql -f`, `bash`).
-   - Capture stdout/stderr + exit code.
-   - Update catalog: `executed: true`, append Execution Log entry.
-   - Update state: `artifacts[].executed = true`.
-   - If exit code != 0 → `status: "failed"`, STOP and report.
+   - **Determine the execution command** from the project's own tooling (check `AGENTS.md`; e.g. `alembic upgrade head`, `psql -f <path>`, `bash <path>`).
+   - **Dry-run first (always)**:
+     - If the tool supports it (`--dry-run`, `--check`, `--sql` for alembic; `EXPLAIN` for SQL; `bash -n` for syntax check), run it and show the plan.
+     - Otherwise show the exact command that *would* run.
+     - **STOP here unless `--execute` was passed.**
+   - **If `--execute` passed**:
+     - Execute via the project's own tooling.
+     - Capture stdout/stderr + exit code.
+     - Update catalog: `executed: true`, append Execution Log entry.
+     - Update state: `artifacts[].executed = true`.
+     - If exit code != 0 → `status: "failed"`, STOP and report.
 5. **For `verify <path>`**:
-   - Check the expected side effect actually happened (e.g. table exists, row inserted).
+   - **Dry-run by default too**: report what would be checked, do not run probes against a live DB.
+   - **If `--execute` passed**: check the expected side effect actually happened (e.g. table exists, row inserted).
    - Update `verified: true` in catalog + state.
-6. **For `mark`**: update fields as specified, no execution.
+6. **For `mark`**: update fields as specified, no execution. This is the escape hatch for scripts already run outside sean.
 7. Save history snapshot (`action: "artifact"`).
-8. Output: artifact path + action + result.
+8. Output: artifact path + action + dry-run plan OR execution result.
+
+### Safety Rules
+
+- `--execute` is **required** for any action that mutates external state (DB, files outside the project, network).
+- Never infer `--execute` from context — the flag must be explicit.
+- `mark` is the only way to record an execution that happened outside this command.
+- If the project has no established tooling for a type (no alembic, no psql config), **do not execute** — report the gap and ask the user.
 
 ### Usage
 
 ```bash
 sean artifact auth list
+# dry-run（默认，安全）
 sean artifact auth run migrations/001_create_users.sql
-sean artifact auth verify migrations/001_create_users.sql
+# 真正执行
+sean artifact auth run migrations/001_create_users.sql --execute
+sean artifact auth verify migrations/001_create_users.sql --execute
 sean artifact auth mark scripts/init_admin.sh --executed --verified
 ```
 
@@ -1089,6 +1119,7 @@ sean fix [name]                  # 修复最近失败的任务
 sean bug <name> [desc] [--task N] [--already-fixed --files f1,f2]
                                  # 记录/修复 run 后实测发现的 bug（test-first）
 sean artifact <name> <action>    # 执行/验证产物脚本（list|run|verify|mark）
+                                 # run/verify 默认 dry-run，需 --execute 才真跑
 sean undo [name] [steps]         # 撤销操作（文件+状态）
 sean retry <name>                # 重试最近失败的任务
 sean list                        # 列出所有功能
@@ -1119,6 +1150,8 @@ sean clean [--keep-reports]      # 清理所有 sean 状态
 | Artifact not declared | `产物 <path> 未在 plan 中声明` | Suggest `sean plan` |
 | Artifact catalog missing | `产物目录不存在。运行: sean run <name>` | — |
 | Artifact executed, cannot undo | `产物 <path> 已执行，删除会造成状态不一致` | Ask before deleting |
+| Artifact needs --execute | `需要 --execute 才会真正执行。当前为 dry-run` | Re-run with `--execute` |
+| No tooling for artifact type | `项目未配置 <type> 的执行工具（如 alembic/psql）` | Report gap, ask user |
 
 ---
 
