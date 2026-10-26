@@ -14,6 +14,16 @@
 Task 1 → Task 2
 Task 1 → Task 3
 
+## Artifact Inference
+
+> AI 从需求推断的产物（用户可在 review plan 时增删）
+
+| Type | Path | Inferred From |
+|------|------|---------------|
+| {{type}} | `{{path}}` | {{requirement_signal}} |
+
+<!-- 无产物时写: | — | — | 需求未涉及存储/批处理/配置 | -->
+
 ## Task Details
 
 ### Task 1: {{name}}
