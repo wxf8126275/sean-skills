@@ -1,7 +1,7 @@
 ---
 name: sean
 description: "AI-Native Team Development Workflow: standardizes how AI agents produce transferable knowledge — any AI can take over any other AI's work, even across context resets or model changes. Zero external dependencies."
-version: 3.5.0
+version: 3.6.0
 trigger: sean
 ---
 
@@ -58,6 +58,8 @@ Activated when user input starts with `sean ` (case-insensitive).
 ```
 
 **产物目录是索引，不是容器。** 数据库脚本、批处理命令、配置模板留在项目自己的标准位置（`migrations/`、`scripts/`、`config/`），`docs/artifacts/` 只记录它们的存在、归属和状态。理由：这些是可执行产物，项目运行时 / CI / 部署流程按标准路径查找，移进 docs 会破坏项目约定。
+
+**产物由 AI 在 `sean plan` 阶段自行推断**，不询问用户。推断依据写入 plan 的 `Artifact Inference` 表，用户在 review plan 时可以增删——这是监督点，不是提问点。
 
 ## Artifact Types
 
@@ -146,11 +148,7 @@ When finishing a feature, the agent MUST produce:
      - "这个功能解决什么问题？（一句话）"
      - "关键行为是什么？（逗号分隔）"
      - "验收标准是什么？（逗号分隔）"
-4. **Ask about non-code artifacts** (one question):
-   - "这个需求会产生非代码产物吗？（数据库脚本 / 批处理命令 / 配置文件）"
-   - If yes: ask which types, and record in `Artifacts (expected)` section.
-   - This is a business decision — do NOT let the AI infer it silently.
-5. **Create requirement file** at `docs/requirements/<date>-<name>.md`:
+4. **Create requirement file** at `docs/requirements/<date>-<name>.md`:
    ```markdown
    # <Feature Name>
 
@@ -165,24 +163,19 @@ When finishing a feature, the agent MUST produce:
    - <criterion 1> → verifiable by <test/manual/demo>
    - <criterion 2> → verifiable by <test/manual/demo>
 
-   ## Artifacts (expected)
-
-   > 需求文档只声明**需要什么类型**的产物，不声明具体路径。
-   > 具体路径由 `sean plan` 决定，索引写入 `docs/artifacts/<date>-<feature>.md`。
-
-   - **Database**: <db_scripts>
-   - **Batch**: <batch_scripts>
-   - **Config**: <config_files>
-
    ## Context
    - Tech stack: <inferred or stated>
    - Related features: <list known dependencies>
    - Constraints: <performance/security/compat constraints>
    - Non-goals: <what this feature explicitly does NOT do>
    ```
-6. **Update state**: create entry in `state.json` → `features.<name>` with `status: "DRAFT"`. Set `active`.
-7. **Save history**: Record `start` action snapshot.
-8. **Output**: file path, status, next step (`sean plan <name>`).
+
+   > **非代码产物（数据库脚本 / 批处理 / 配置文件）不在本阶段声明。**
+   > `sean plan` 会从 Behaviors + Acceptance Criteria 自行推断需要哪些产物并写入 task 的 `artifacts` 字段。
+   > 需求方如需强制某个产物，可在 Behaviors 里明写（例如"需要建表 SQL"），plan 阶段会据此推断。
+5. **Update state**: create entry in `state.json` → `features.<name>` with `status: "DRAFT"`. Set `active`.
+6. **Save history**: Record `start` action snapshot.
+7. **Output**: file path, status, next step (`sean plan <name>`).
 
 ---
 
@@ -212,13 +205,21 @@ When finishing a feature, the agent MUST produce:
    - `depends_on`: list of task ids (or empty)
    - `estimated_complexity`: `low` | `medium` | `high`
    - `parallel_safe`: boolean (can run concurrently with other tasks?)
-6. **Derive artifact paths from the requirement's `Artifacts (expected)`**:
-   - Read the requirement's `Artifacts (expected)` section.
-   - For each declared type, assign the concrete path following the project's own conventions (check `AGENTS.md` / existing dirs).
-   - `database` → `migrations/<NNN>_<slug>.sql`
-   - `batch` → `scripts/<slug>.sh`
-   - `config` → `config/<slug>.template`
-   - Do NOT invent paths if the project has no established convention — ask.
+6. **Infer artifacts from the requirement** (AI decides — do NOT ask the user):
+   - Read `Behaviors` + `Acceptance Criteria` + `Problem`.
+   - Infer which non-code products the feature needs. The AI owns this decision.
+   - **Inference rules**:
+     | Signal in requirement | Inferred artifact |
+     |----------------------|-------------------|
+     | 存储 / 表 / 字段 / 关联 / 索引 / 迁移 | `database` |
+     | 初始化数据 / 种子数据 / 迁移历史数据 / 定时任务 / 批量处理 | `batch` |
+     | 密钥 / 配置项 / 环境变量 / 连接串 / 模板 | `config` |
+   - **Assign concrete paths** following the project's own conventions (check `AGENTS.md` / existing dirs):
+     - `database` → `migrations/<NNN>_<slug>.sql`
+     - `batch` → `scripts/<slug>.sh`
+     - `config` → `config/<slug>.template`
+   - **If no signal → declare no artifacts.** Do not invent them to look thorough.
+   - **If the project has no established convention** for a type, put the artifact on the most likely path and flag the assumption in the plan output so the user can correct it at review.
 7. **Validate**: no circular dependencies, all tasks have unique names.
 8. **Write plan** to `docs/plans/<date>-<name>.md`:
    ```markdown
@@ -239,6 +240,16 @@ When finishing a feature, the agent MUST produce:
    Task 1 → Task 2
    Task 1 → Task 3
 
+   ## Artifact Inference
+
+   > AI 从需求推断的产物（用户可在 review plan 时增删）
+
+   | Type | Path | Inferred From |
+   |------|------|---------------|
+   | database | `migrations/001_create_users.sql` | Behavior "用户可通过邮箱注册" → 需存储用户 |
+   | batch | `scripts/init_admin.sh` | Behavior "管理员可查看所有用户" → 需初始化管理员 |
+   | config | `config/jwt.template` | Acceptance "登录成功返回 JWT" → 需密钥配置 |
+
    ## Task Details
 
    ### Task 1: <name>
@@ -252,7 +263,7 @@ When finishing a feature, the agent MUST produce:
    ```
 9. **Update state**: `status: "PLANNED"`, `tasks_total`, initialize `tasks[]` with complexity, parallel_safe, and `artifacts[]` (status: `declared`).
 10. **Save history**: Record `plan` action.
-11. **Output**: task list summary, next step (`sean run <name> --dry-run`).
+11. **Output**: task list summary + artifact inference table, next step (`sean run <name> --dry-run`).
 
 ---
 
