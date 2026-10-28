@@ -1,51 +1,61 @@
 #!/bin/bash
 # sean-skills installer
-# Usage: bash install.sh
+# Usage: bash install.sh [install_dir]
+#
+# 安装内容：
+#   SKILL.md      路由主文件（唯一常驻上下文）
+#   references/   命令流程，按需加载
+#   templates/    文档模板
+#   scripts/      state 引擎与工具脚本
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_SRC="$SCRIPT_DIR/SKILL.md"
-SCRIPTS_SRC="$SCRIPT_DIR/scripts"
-INSTALL_DIR="${HOME}/.hermes/skills/your-skills/sean"
-mkdir -p "$INSTALL_DIR"
+INSTALL_DIR="${1:-${HOME}/.hermes/skills/your-skills/sean}"
 
 if [ ! -f "$SKILL_SRC" ]; then
     echo "ERROR: SKILL.md not found in $SCRIPT_DIR"
     exit 1
 fi
 
+mkdir -p "$INSTALL_DIR"
 cp "$SKILL_SRC" "$INSTALL_DIR/SKILL.md"
 
-if [ -d "$SCRIPTS_SRC" ]; then
-    mkdir -p "$INSTALL_DIR/scripts"
-    cp "$SCRIPTS_SRC"/*.py "$INSTALL_DIR/scripts/" 2>/dev/null || true
-    echo "✅ scripts installed to $INSTALL_DIR/scripts"
-fi
+for sub in references templates scripts; do
+    if [ -d "$SCRIPT_DIR/$sub" ]; then
+        mkdir -p "$INSTALL_DIR/$sub"
+        cp -R "$SCRIPT_DIR/$sub/." "$INSTALL_DIR/$sub/"
+        echo "  installed $sub -> $INSTALL_DIR/$sub"
+    fi
+done
 
-echo "✅ sean skill installed to $INSTALL_DIR"
-echo ""
-echo "Available commands:"
-echo "  sean init <project>           - Initialize project (conventions + onboarding)"
-echo "  sean start <name> [desc...]   - Create requirement"
-echo "  sean plan <name>              - Generate TDD plan"
-echo "  sean run <name> [--dry-run]   - Execute plan (TDD + regression + handoff)"
-echo "                                 (asks before spawning sub-agents for parallel tasks)"
-echo "  sean dispatch <plan> [--fmt]  - Group tasks into dependency waves for sub-agents"
-echo "  sean task <name> <N>          - Execute single task"
-echo "  sean handoff <name>           - Generate handoff document for next AI"
-echo "  sean sync <name>              - Recover state from test reports"
-echo "  sean review <name>            - Five-dimension assessment + code review + findings"
-echo "  sean learn <name>             - Extract reusable patterns from history"
-echo "  sean findings [name]          - View/manage Agent Work Loop findings"
-echo "  sean fix [name]               - Fix recent failure"
-echo "  sean bug <name> [desc]       - Record/fix post-run bug (test-first)"
-echo "  sean artifact <name> <act>  - Execute/verify artifacts (list|run|verify|mark)"
-echo "  sean undo [name] [steps]      - Undo last operation"
-echo "  sean retry <name>             - Retry recent failure"
-echo "  sean list                     - List all features"
-echo "  sean status <name>            - Show feature details"
-echo "  sean report [name]            - Test report summary"
-echo "  sean switch <name>            - Switch active feature"
-echo "  sean export <name> --format <f> - Export to other agent formats"
-echo "  sean clean [--keep-reports]   - Clean state"
+chmod +x "$INSTALL_DIR"/scripts/*.py 2>/dev/null || true
+
+cat <<'EOF'
+
+sean skill installed.
+
+建议在 shell 里加个别名，省去每次拼脚本路径：
+  alias sean-state='python3 ~/.hermes/skills/your-skills/sean/scripts/sean_state.py'
+
+Available commands:
+  sean init <project>             - Initialize project (conventions + onboarding)
+  sean start <name> [desc...]     - Create requirement
+  sean plan <name>                - Generate TDD plan
+  sean run <name> [--dry-run] [--lite]
+                                  - Execute plan (TDD + regression + handoff)
+  sean task <name> <N>            - Execute single task
+  sean dispatch <plan> [--fmt]    - Group tasks into dependency waves
+  sean handoff <name> [--lite]    - Generate handoff document
+  sean sync <name>                - Recover state from test reports
+  sean review <name>              - Diff-based self-review + five-dimension assessment
+  sean learn <name>               - Extract reusable patterns from history
+  sean findings [name]            - View/manage findings
+  sean fix [name]                 - Fix recent failure
+  sean bug <name> [desc]          - Record/fix post-run bug (test-first)
+  sean artifact <name> <act>      - Execute/verify artifacts (dry-run by default)
+  sean undo [name] [steps]        - Undo (state via script, files via git)
+  sean retry <name>               - Retry recent failure
+  sean list / status / report / switch / export / clean
+EOF
