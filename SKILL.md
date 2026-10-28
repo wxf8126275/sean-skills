@@ -65,6 +65,7 @@ sean 的价值在"知识可传承"，但**传承的载体是可读的结论，�
 | `dispatch / sync / fix / undo / retry / list / status / report / switch / clean / learn / findings / export` | 维护类命令 | `cmd-maintenance.md` |
 | 需要 state 字段定义时 | — | `state-schema.md` |
 | **多端需求**（可选，仅同需求多端实现时） | 契约 + 一致性校验 | `multi-target.md` |
+| 报错 / 异常处理 | 错误速查 | `errors.md` |
 
 **skill 根目录** = 本 `SKILL.md` 所在目录（`install.sh` 默认装到 `~/.hermes/skills/your-skills/sean/`）。不确定时先 `ls` 确认 `references/` 存在，再拼绝对路径读取。
 
@@ -100,73 +101,17 @@ Quick Path **不生成**：artifacts catalog、review 五维评估、findings、
 
 ## 路径约定
 
-```
-<project>/
-├── docs/
-│   ├── requirements/<YYYY-MM-DD>-<feature>.md
-│   ├── plans/<YYYY-MM-DD>-<feature>.md
-│   ├── artifacts/<YYYY-MM-DD>-<feature>.md       ← 产物索引（非容器）
-│   ├── test-reports/<YYYY-MM-DD>-<feature>/
-│   │   ├── task-N-<name>.md  bugs.md  summary.md  handoff.md  review.md
-│   ├── team/
-│   │   ├── conventions.md  onboarding.md  lessons.md
-│   └── .sean/
-│       ├── state.json                            ← 摘要（<2KB）
-│       ├── features/<feature>.json               ← 明细，按需读
-│       ├── active
-│       └── history/  index.jsonl + <id>.json     ← 最小逆向补丁
-├── migrations/  scripts/  config/                ← 产物留项目标准位置
-```
+文档在 `docs/`（`requirements/` `plans/` `test-reports/` `team/` `artifacts/`），状态在 `docs/.sean/`（`state.json` 摘要 + `features/<name>.json` 明细 + `history/`）。完整目录树见 `README.md`。
 
-**产物目录是索引，不是容器。** 数据库脚本、批处理命令、配置模板留在项目自己的标准位置（`migrations/`、`scripts/`、`config/`），`docs/artifacts/` 只记录它们的存在、归属和状态——因为这些是可执行产物，运行时 / CI / 部署按标准路径查找，移进 docs 会破坏项目约定。
-
-**产物由 AI 在 `sean plan` 阶段自行推断**，不询问用户。推断依据写入 plan 的 `Artifact Inference` 表，用户在 review plan 时增删——这是监督点，不是提问点。产物分 `database` / `batch` / `config` 三类，各有 `status`（declared→created→failed）、`executed`、`verified` 三个独立维度，因为「脚本被创建」≠「脚本被执行」≠「执行结果正确」。详细规则见 `references/cmd-plan.md`。
+**产物目录是索引，不是容器。** DB 脚本 / 批处理 / 配置留在项目标准位置（`migrations/` `scripts/` `config/`），`docs/artifacts/` 只索引。产物由 AI 在 `sean plan` 阶段自行推断，分 database/batch/config 三类，各有 status/executed/verified 三维。规则见 `references/cmd-plan.md`。
 
 ---
 
 ## 状态存储契约
 
-**唯一入口：`scripts/sean_state.py`。禁止直接编辑 `docs/.sean/` 下的 JSON。**
+**唯一入口：`scripts/sean_state.py`，禁止手写 `docs/.sean/` 下的 JSON。**
 
-```bash
-S=<sean-root>/scripts/sean_state.py
-
-python3 $S init
-python3 $S create <feature> --requirement <path> --set-active
-python3 $S get [feature] [--full]      # 默认单行摘要（省 token）
-python3 $S list | active | switch <feature>
-python3 $S set <feature> key=<json>
-python3 $S task-status <feature> <n> <status> [--tests-total N] [--tests-passed N] [--fixes N] [--report P]
-python3 $S feature-status <feature> <STATUS> [--blocker TEXT]
-python3 $S add-task|add-bug|add-finding <feature> --json '<obj>'
-python3 $S snapshot <action> [feature] [--files-created ..] [--files-modified ..]
-python3 $S undo [n] [--with-files]
-python3 $S sync <feature>              # 从 test-reports 重建
-python3 $S export [feature]            # 导出可读 JSON（交接用）
-```
-
-为什么这样省 token：
-
-- `state.json` 只存**摘要**，明细在 `features/<name>.json`；`get` 默认输出一行，不把全量灌进上下文。
-- **history 只存被改动顶层键的旧值**，不再存 before/after 全量快照。单条 <1KB，且不随项目内 feature 总数增长。
-- 写操作自动累积逆向补丁，`snapshot <action>` 落成一条事件并清空累积。**一个 run 只需 snapshot 一次**，`undo` 即整体回退。
-- 旧版 v4 全量 `state.json` 首次读取时自动迁移，无需手工处理。
-
-字段定义见 `references/state-schema.md`（仅需要时读）。
-
----
-
-## 错误速查
-
-| 情形 | 处理 |
-|------|------|
-| 功能不存在 | 跑 `sean list`；新建走 `sean start` |
-| 需求/计划缺失 | 依次补 `sean start` / `sean plan` |
-| 依赖未完成 | 先跑依赖，或跳过该 task |
-| 单测超时 (>60s) | 缩小测试范围或跳过 |
-| 连续 2 个 task 失败 | STOP，输出 blocker，`sean undo` 回退 |
-| 产物需执行确认 | 显式加 `--execute`（默认 dry-run） |
-| 产物未声明 | 回 `sean plan` 补声明 |
+高频命令（`get` / `task-status` / `feature-status` / `snapshot` / `undo`）见上方 Quick Path；完整命令与字段定义见 `references/state-schema.md`（仅需要时读）。
 
 ---
 
