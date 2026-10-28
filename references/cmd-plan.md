@@ -42,22 +42,20 @@
    - `estimated_complexity`：`low` | `medium` | `high`
    - `parallel_safe`：能否与其他 task 并发
 
-6. **推断产物**（AI 自行决定，**不要问用户**）：
-   - 依据：需求的 `Behaviors` + `Acceptance Criteria` + `Problem`。
-   - 推断规则：
+6. **推断产物**（用脚本，不要凭感觉猜 —— AI 自行决定，**不要问用户**）：
+   ```bash
+   python3 <sean-root>/scripts/sean_infer_artifacts.py \
+     --requirement docs/requirements/<date>-<name>.md --project . --feature <name>
+   ```
+   输出 JSON 数组，每项含 `type` / `path` / `inferred_from` / `signal_layer` / `reason` / `project_convention_detected`。
 
-     | 需求中的信号 | 推断产物 |
-     |---|---|
-     | 存储 / 表 / 字段 / 关联 / 索引 / 迁移 | `database` |
-     | 初始化数据 / 种子数据 / 迁移历史数据 / 定时任务 / 批量处理 | `batch` |
-     | 密钥 / 配置项 / 环境变量 / 连接串 / 模板 | `config` |
-
-   - 按项目自身约定赋具体路径（先看 `AGENTS.md` 与既有目录）：
-     - `database` → `migrations/<NNN>_<slug>.sql`
-     - `batch` → `scripts/<slug>.sh`
-     - `config` → `config/<slug>.template`
-   - **无信号就不声明产物**，不要为"显得周全"硬造。
-   - 项目没有既有约定时，放在最可能的路径，并在 plan 输出里标注该假设，等用户 review 时纠正。
+   处理规则：
+   - `signal_layer: explicit` —— 需求明写了"建表""初始化数据""需要配置"等 → 直接采纳。
+   - `signal_layer: semantic` —— 从业务语言推断（如"用户可注册"→需建表）→ 采纳，并在 `Artifact Inference` 表的 `Inferred From` 列写清依据。
+   - **脚本返回 `[]` → 不声明任何产物。** 不要为"显得周全"硬造。
+   - `project_convention_detected` 非 null 时，`path` 已遵循项目既有约定（`migrations/`、`alembic/versions/`、`scripts/`…），直接用。
+   - 为 null 时按默认路径填（`migrations/<NNN>_<slug>.sql`、`scripts/<slug>.sh`、`config/<slug>.template`），**并在 plan 输出里标注这是假设**，等用户 review 时纠正。
+   - AI 可以覆盖脚本结论，但必须在 plan 里写明覆盖理由。
 
 7. **校验**：无循环依赖，task 名唯一。
 

@@ -1,192 +1,184 @@
 #!/usr/bin/env python3
 """
-sean_artifact_run.py — 产物脚本执行器（dry-run 默认，--execute 才真跑）。
+sean_artifact_run.py — 产物脚本执行器（默认 dry-run，--execute 才真跑）。
 
-这是 sean artifact run 的机械实现：把「默认 dry-run」从提示变成强制。
-即使调用方忘了传 --execute，这个脚本也只会打印将要执行的命令，不会碰真实环境。
+这是 `sean artifact run` 的机械实现：把「默认 dry-run」从提示变成强制。
+即使调用方忘了传 --execute，本脚本也只会打印将要执行的命令，绝不碰真实环境。
 
 用法:
   # dry-run（默认）
-  python sean_artifact_run.py --project <root> --artifact migrations/001_create_users.sql
+  python3 sean_artifact_run.py --project <root> --feature auth --artifact migrations/001_create_users.sql
 
   # 真正执行
-  python sean_artifact_run.py --project <root> --artifact migrations/001_create_users.sql --execute
+  python3 sean_artifact_run.py --project <root> --feature auth --artifact migrations/001_create_users.sql --execute
 
 退出码:
-  0  成功（dry-run 或执行成功）
-  2  缺少 --execute（被护栏拦下）
+  0  dry-run 完成 / 执行成功 / config 类不可执行（设计如此）
+  2  缺少 --execute（被护栏拦下）—— 保留位，当前 dry-run 返回 0
   3  产物未声明 / catalog 缺失
   4  项目无对应执行工具
   N  执行命令自身的退出码
+
+存储兼容：v5 明细在 docs/.sean/features/<name>.json；v4 全量在 docs/.sean/state.json。
 """
+
+from __future__ import annotations
 
 import argparse
 import json
-import re
-import shlex
 import subprocess
 import sys
 from pathlib import Path
 
 
-# 每种产物类型的执行工具探测规则
-# 注意: dry-run 命令必须用 (文件, 标志) 顺序 —— `bash -n <file>` 才是语法检查，
-# 而 `bash <file> -n` 会把 -n 当成位置参数并真的执行脚本。
-TOOL_RULES = [
-    # (type, 探测条件, 命令模板, dry-run 参数)
-    ("database", "alembic", "alembic upgrade head", ["--sql"]),
-    ("database", "psql", "psql -f {path}", []),
-    ("batch", "bash", "bash {path}", ["-n"]),          # -n = 语法检查，不执行
-]
+def load_feature(root: Path, name: str) -> dict | None:
+    detail = root / "docs" / ".sean" / "features" / f"{name}.json"
+    if detail.exists():
+        try:
+            return json.loads(detail.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: {detail} 解析失败: {exc}", file=sys.stderr)
+            raise SystemExit(3)
+    state_path = root / "docs" / ".sean" / "state.json"
+    if not state_path.exists():
+        return None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: state.json 解析失败: {exc}", file=sys.stderr)
+        raise SystemExit(3)
+    return (state.get("features") or {}).get(name)
 
 
-def load_state(project_root: Path) -> dict:
-    p = project_root / "docs" / ".sean" / "state.json"
-    if not p.exists():
-        return {}
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
-def find_artifact(state: dict, feature: str, artifact_path: str):
-    """Find the artifact record in state.json."""
-    feat = state.get("features", {}).get(feature)
-    if not feat:
-        return None, None
-    for task in feat.get("tasks", []):
-        for art in task.get("artifacts", []) or []:
-            if art["path"] == artifact_path:
+def find_artifact(feature: dict, artifact_path: str):
+    for task in feature.get("tasks") or []:
+        for art in task.get("artifacts") or []:
+            if art.get("path") == artifact_path:
                 return task, art
     return None, None
 
 
-def find_catalog(project_root: Path, feature: str):
-    d = project_root / "docs" / "artifacts"
-    if not d.exists():
+def find_catalog(root: Path, feature: str) -> Path | None:
+    d = root / "docs" / "artifacts"
+    if not d.is_dir():
         return None
-    for f in sorted(d.glob("*.md")):
-        if feature in f.name:
-            return f
-    return None
+    exact = sorted(d.glob(f"*-{feature}.md"))
+    if exact:
+        return exact[-1]
+    loose = [f for f in sorted(d.glob("*.md")) if feature in f.stem]
+    return loose[-1] if loose else None
 
 
-def detect_tool(artifact_type: str, project_root: Path, artifact_path: str):
-    """Detect the right execution tool for this artifact type.
-
-    Returns (tool, cmd, dryrun_cmd) where dryrun_cmd is a list of argv
-    guaranteed not to execute anything.
-    """
-    # 1. 项目是否有 alembic（database 类型首选）
+def detect_tool(artifact_type: str, root: Path, artifact_path: str):
+    """返回 (tool, argv, dryrun_argv)。dryrun_argv 保证不产生副作用。"""
     if artifact_type == "database":
-        if (project_root / "alembic.ini").exists():
-            # alembic upgrade --sql 只生成 SQL 不执行
+        if (root / "alembic.ini").exists():
             return ("alembic", ["alembic", "upgrade", "head"],
                     ["alembic", "upgrade", "head", "--sql"])
-        if (project_root / "migrations").exists():
-            # 没有 dry-run 支持，返回 None 让调用方只显示命令
+        if artifact_path.endswith(".sql"):
             return ("psql", ["psql", "-f", artifact_path], None)
-
-    # 2. shell 脚本 —— bash -n <file> 才是语法检查
+        return (None, None, None)
     if artifact_type == "batch":
+        # 注意 `bash -n <file>` 才是语法检查；`bash <file> -n` 会把 -n 当参数真执行
         return ("bash", ["bash", artifact_path], ["bash", "-n", artifact_path])
-
-    # 3. 配置模板：只校验语法，不执行
     if artifact_type == "config":
         return ("none", None, None)
-
     return (None, None, None)
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Run an artifact (dry-run by default)")
-    ap.add_argument("--project", required=True, help="project root")
-    ap.add_argument("--feature", required=True, help="feature name")
-    ap.add_argument("--artifact", required=True, help="artifact path (as declared in plan)")
-    ap.add_argument("--execute", action="store_true",
-                    help="actually execute; without this the tool only dry-runs")
-    args = ap.parse_args()
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="执行产物（默认 dry-run）")
+    ap.add_argument("--project", required=True, help="项目根目录")
+    ap.add_argument("--feature", required=True, help="feature 名")
+    ap.add_argument("--artifact", required=True, help="产物路径（须与 plan 声明一致）")
+    ap.add_argument("--execute", action="store_true", help="真正执行；不加则只 dry-run")
+    args = ap.parse_args(argv)
 
     root = Path(args.project).resolve()
 
-    # --- 校验 1: 产物必须在 plan 中声明 ---
-    state = load_state(root)
-    task, art = find_artifact(state, args.feature, args.artifact)
+    feature = load_feature(root, args.feature)
+    if feature is None:
+        print(f"ERROR: feature '{args.feature}' 不在 state 中（docs/.sean/）", file=sys.stderr)
+        return 3
+
+    task, art = find_artifact(feature, args.artifact)
     if art is None:
-        print(f"ERROR: artifact '{args.artifact}' is not declared in state.json for feature '{args.feature}'")
-        print("       Run 'sean plan <name>' to declare artifacts.")
-        sys.exit(3)
+        print(f"ERROR: 产物 '{args.artifact}' 未在 plan 中声明（feature: {args.feature}）", file=sys.stderr)
+        declared = [a.get("path") for t in (feature.get("tasks") or [])
+                    for a in (t.get("artifacts") or [])]
+        print(f"       已声明: {declared or '(无)'}", file=sys.stderr)
+        print("       先运行 'sean plan <name>' 声明产物。", file=sys.stderr)
+        return 3
 
     catalog = find_catalog(root, args.feature)
-    if catalog is None:
-        print(f"ERROR: artifact catalog missing at docs/artifacts/ for '{args.feature}'")
-        print("       Run 'sean run <name>' first.")
-        sys.exit(3)
-
-    art_type = art["type"]
+    art_type = art.get("type", "")
     tool, cmd, dryrun_cmd = detect_tool(art_type, root, args.artifact)
 
-    # --- 配置模板：不是"没有工具"，是"设计上不可执行" ---
     if tool == "none":
-        print("CONFIG artifact — not executable by design, no action taken.")
-        print(f"  Path: {args.artifact}")
-        print(f"  Catalog: {catalog.relative_to(root)}")
-        print("  Use 'sean artifact <name> mark <path> --executed --verified' if it was applied elsewhere.")
-        sys.exit(0)
+        print("CONFIG 产物 — 设计上不可执行，无需操作。")
+        print(f"  Path    : {args.artifact}")
+        print(f"  Catalog : {catalog.relative_to(root) if catalog else '(missing)'}")
+        print("  若已在项目外应用，用 'sean artifact <name> mark <path> --executed --verified' 记录。")
+        return 0
 
-    # --- 校验 2: 项目是否有执行工具 ---
     if tool is None or cmd is None:
-        print(f"ERROR: no execution tooling detected for artifact type '{art_type}'")
-        print(f"       Project has no alembic.ini, migrations/, or shell available.")
-        print("       Fix the tooling, or use 'sean artifact <name> mark <path> --executed'.")
-        sys.exit(4)
+        print(f"ERROR: 未探测到 {art_type} 类型的执行工具", file=sys.stderr)
+        print("       项目缺少 alembic.ini / .sql 文件 / shell 支持。", file=sys.stderr)
+        print(f"       修复工具链，或用 'sean artifact {args.feature} mark {args.artifact} --executed'。",
+              file=sys.stderr)
+        return 4
 
-    # --- 护栏：没有 --execute 就只 dry-run ---
     if not args.execute:
         print("=" * 60)
-        print("DRY-RUN — nothing was executed")
+        print("DRY-RUN — 未执行任何操作")
         print("=" * 60)
         print(f"  Feature : {args.feature}")
         print(f"  Artifact: {args.artifact}")
         print(f"  Type    : {art_type}")
-        print(f"  Task    : {task['id']} ({task['name']})")
+        print(f"  Task    : {task.get('id')} ({task.get('name', '')})")
         print(f"  Tool    : {tool}")
         print(f"  Command : {' '.join(cmd)}")
+        if catalog is None:
+            print("  ⚠ catalog 缺失：执行后无法回写执行记录")
         print()
-
-        # 尝试跑真正的 dry-run（语法检查 / --sql / EXPLAIN）
         if dryrun_cmd:
             print(f"  Probe   : {' '.join(dryrun_cmd)}")
             print("-" * 60)
-            r = subprocess.run(dryrun_cmd, cwd=root, capture_output=True, text=True)
-            if r.stdout:
-                print(r.stdout[:2000])
-            if r.stderr:
-                print("[stderr]", r.stderr[:1000])
+            probe = subprocess.run(dryrun_cmd, cwd=root, capture_output=True, text=True)
+            if probe.stdout:
+                print(probe.stdout[:2000])
+            if probe.stderr:
+                print("[stderr]", probe.stderr[:1000])
             print("-" * 60)
-            print(f"  Probe exit code: {r.returncode}")
+            print(f"  Probe exit code: {probe.returncode}")
+            if probe.returncode != 0:
+                print("  ⚠ 探测失败 —— 真正执行很可能也会失败，先修脚本")
         else:
-            print("  (this tool has no safe dry-run mode — showing the command only)")
-
+            print("  (该工具无安全 dry-run 模式，仅显示命令)")
         print()
-        print("To actually execute, re-run with --execute:")
+        print("确认无误后加 --execute 真正执行：")
         print(f"  sean artifact {args.feature} run {args.artifact} --execute")
-        sys.exit(0)
+        return 0
 
-    # --- 真正执行 ---
     print("=" * 60)
-    print("EXECUTE — mutating external state")
+    print("EXECUTE — 将改变外部状态")
     print("=" * 60)
     print(f"  Command: {' '.join(cmd)}")
     print("-" * 60)
-
-    r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
-    if r.stdout:
-        print(r.stdout[:4000])
-    if r.stderr:
-        print("[stderr]", r.stderr[:2000])
+    result = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    if result.stdout:
+        print(result.stdout[:4000])
+    if result.stderr:
+        print("[stderr]", result.stderr[:2000])
     print("-" * 60)
-    print(f"Exit code: {r.returncode}")
-    sys.exit(r.returncode)
+    print(f"Exit code: {result.returncode}")
+    if result.returncode == 0:
+        print()
+        print("下一步：回写状态（catalog + state 两处都要）：")
+        print("  catalog: 该产物 Executed 列改 ✅，并在 Execution Log 追加一行")
+        print(f"  state  : sean_state.py set {args.feature} ...（或 add-task 时带 executed:true）")
+    return result.returncode
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main(sys.argv[1:]))

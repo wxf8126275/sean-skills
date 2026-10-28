@@ -24,39 +24,56 @@ sean artifact auth run migrations/001_create_users.sql --execute
 
 ## Actions
 
-| Action | 行为 |
-|---|---|
-| `list` | 按类型分组列出该 feature 的所有产物，显示 status / executed / verified |
-| `run <path> [--execute]` | dry-run（默认）或执行单个产物，结果写入 catalog 的 Execution Log |
-| `verify <path> [--execute]` | 验证执行结果（检查预期副作用） |
-| `mark <path> --executed --verified` | 手动标记状态（脚本已在别处执行过时） |
+| Action | 行为 | 底层实现 |
+|---|---|---|
+| `list` / `check` | 列出产物并校验 catalog ↔ state ↔ 磁盘三者一致、反向引用头、三维对齐 | `sean_artifact_check.py` |
+| `run <path> [--execute]` | dry-run（默认）或执行单个产物 | `sean_artifact_run.py` |
+| `verify <path> [--execute]` | 验证执行结果（检查预期副作用） | prompt（无通用实现） |
+| `mark <path> --executed --verified` | 手动标记状态（产物已在 sean 之外执行过） | `sean_state.py set` |
+
+> **机械判断交给脚本，解读与落盘交给 AI。** 尤其 `run`：dry-run 的强制性由脚本保证（不加 `--execute` 绝不可能执行），不依赖 AI 自觉。
 
 ---
 
 ## Steps
 
 1. 取状态：`python3 <sean-root>/scripts/sean_state.py get <name> --full`。不存在则报错。
-2. 读 catalog `docs/artifacts/<date>-<name>.md`。缺失 → 提示先跑 `sean run`（或 `--lite` 下不存在，属正常）。
-3. **`list`**：打印 catalog 表格（按类型分组）。
-4. **`run <path>`**：
-   - 在 state 的 `tasks[].artifacts[]` 中查找。未声明 → `产物 <path> 未在 plan 中声明`。
-   - 从项目自身工具链确定执行命令（查 `AGENTS.md`；如 `alembic upgrade head`、`psql -f <path>`、`bash <path>`）。
-   - **先 dry-run**：
-     - 工具支持则真跑 dry-run（alembic `--sql`、SQL `EXPLAIN`、`bash -n`）并展示计划。
-     - 否则只显示将要执行的完整命令。
-     - **没有 `--execute` 就到此为止。**
-   - **有 `--execute`**：
-     - 用项目自身工具链执行，捕获 stdout/stderr + exit code。
-     - 更新 catalog：`executed: true` + 追加 Execution Log。
-     - 更新 state：`artifacts[].executed = true`。
-     - exit code ≠ 0 → `status: failed`，STOP 并上报。
+
+2. **`list` / `check`**（同一个脚本，`check` 信息更全）：
+   ```bash
+   python3 <sean-root>/scripts/sean_artifact_check.py . <name>          # 人读
+   python3 <sean-root>/scripts/sean_artifact_check.py . <name> --json   # AI 消费
+   ```
+   退出码 0 = 一致（可能含 warning），1 = 有 error。把 error 逐条报告给用户，**不要**自行修改产物或 state 来"消除" error。
+
+   > `--lite` 模式下不生成 catalog，此时 check 会报「catalog 缺失」，属预期，不是故障。
+
+3. **`run <path>`**：
+   ```bash
+   # dry-run（默认，安全）
+   python3 <sean-root>/scripts/sean_artifact_run.py --project . --feature <name> --artifact <path>
+
+   # 真正执行（必须由用户显式要求）
+   python3 <sean-root>/scripts/sean_artifact_run.py --project . --feature <name> --artifact <path> --execute
+   ```
+   脚本已负责：产物是否在 plan 中声明（退出码 3）、工具探测（alembic / psql / bash，退出码 4）、配置类不执行、dry-run 探测（`alembic --sql`、`bash -n`）。
+
+   **你不需要再手工拼执行命令，也不要绕过脚本直接跑 shell。** 脚本输出 exit≠0 时如实上报，STOP。
+
+4. **执行成功后回写两处**（脚本只打印提示，不做写入）：
+   - catalog `docs/artifacts/<date>-<name>.md`：该产物 `Executed` 列改 ✅，`Execution Log` 追加一行（时间 + 命令 + 结果）。
+   - state：把该产物的 `executed` 置 true（`sean_state.py set` 或重建 task 时带该字段）。
+
 5. **`verify <path>`**：
    - **同样默认 dry-run**：说明将检查什么，不对线上库发探测。
    - `--execute` 时才检查预期副作用（表是否存在、行是否插入）。
-   - 更新 `verified: true`。
+   - 更新 `verified: true`（catalog + state 两处）。
+
 6. **`mark`**：按参数改字段，不执行。这是"已在 sean 之外执行过"的逃生口。
+
 7. `snapshot artifact <name>`。
-8. 输出：产物路径 + action + dry-run 计划 或 执行结果。
+
+8. 输出：产物路径 + action + dry-run 计划 或 执行结果。**不要**回显脚本的完整 dry-run 输出，只摘关键几行。
 
 ---
 
