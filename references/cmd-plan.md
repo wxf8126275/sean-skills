@@ -4,6 +4,18 @@
 
 ---
 
+## 前置：多端 feature 必须先有契约
+
+若 state 中该 feature 有 `targets` 键（`sean_state.py targets list <name>` 可确认）：
+
+1. 确认 `docs/contracts/<date>-<name>/contract.md` 存在且 `status: locked`。缺失则 STOP，先补契约（流程见 `references/multi-target.md`）。
+2. 每个 task 必须关联契约条款：详情块加 `**Target**: <端>` 与 `**Contract**: C-NN`，登记 state 时带 `target` / `contract_ref` 字段。
+3. **任务矩阵写在契约文件里，不要做成 plan 的表格**——`sean_dispatch.py` 的正则会误把 5 列表格识别为 task。
+
+单端 feature 跳过本节。
+
+---
+
 ## Steps
 
 1. **加载需求**：`docs/requirements/<date>-<name>.md`。缺失则报错并提示 `sean start`。

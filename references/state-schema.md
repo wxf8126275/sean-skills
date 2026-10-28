@@ -135,6 +135,23 @@ docs/.sean/
 
 ---
 
+## 多端可选键（单端 feature 不存在这些键）
+
+```jsonc
+{
+  "primary_target": "android",        // 未标 target 的 task 归属；缺失 = 单端
+  "targets": {                        // 缺失 = 单端
+    "android": "done",                // 由该端 tasks 自动推导，勿手工设置
+    "ios": "in_progress",
+    "harmony": "pending"
+  },
+  "contract": "docs/contracts/<date>-<name>/contract.md",
+  "parity": { "status": "fail", "gaps": ["C-01/ios"] }
+}
+```
+
+`tasks[]` 中每个 task 可带 `target` 与 `contract_ref`。**tasks 保持平铺**（不嵌套进 `targets`），因此 `task-status` / `undo` / `sync` / `list` 无需感知多端。
+
 ## history 事件
 
 ### `history/index.jsonl`（每行一条）

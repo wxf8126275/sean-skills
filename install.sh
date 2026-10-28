@@ -31,6 +31,7 @@ for sub in references templates scripts; do
 done
 
 chmod +x "$INSTALL_DIR"/scripts/*.py 2>/dev/null || true
+rm -rf "$INSTALL_DIR"/scripts/__pycache__ 2>/dev/null || true
 
 cat <<'EOF'
 
@@ -58,4 +59,8 @@ Available commands:
   sean undo [name] [steps]        - Undo (state via script, files via git)
   sean retry <name>               - Retry recent failure
   sean list / status / report / switch / export / clean
+
+Optional (multi-platform consistency, off by default):
+  python3 <skill>/scripts/sean_state.py detect-targets
+  python3 <skill>/scripts/sean_parity.py --feature <name>
 EOF

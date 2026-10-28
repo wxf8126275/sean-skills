@@ -55,6 +55,12 @@
 
 所有 `depends_on` 必须为 `done`。否则提示用户：先跑依赖 / 跳过。
 
+**多端 feature**（state 有 `targets` 键时）额外两条：
+
+- 只执行 `target` 匹配当前端的 task；跨端 task 留给对应端工程师（用 `sean task <name> N`）。
+- 每个 task 的测试必须从 `docs/contracts/<date>-<name>/cases/` 加载**共享用例**，不要自造等价断言——这是消除跨端逻辑漂移的唯一手段。
+- 全部端完成后仍需跑 `sean_parity.py`，PASS 才能置 `DONE`。详见 `references/multi-target.md`。
+
 ### 2. 上下文加载（**严格遵守 Token 纪律**）
 
 - **禁止**"读所有 files_modify"。

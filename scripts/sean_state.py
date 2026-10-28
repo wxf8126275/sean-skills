@@ -131,14 +131,16 @@ class Store:
         path = self.feature_file(name)
         old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
+        feature.setdefault("name", name)
+        feature["updated_at"] = now_iso()
+        # 先做派生字段计算（targets 状态、tests 汇总），再 diff，保证补丁完整
+        self.touch_summary(state, name, feature)
+
         restore, absent = diff_top_level(old, feature)
         if restore or absent:
             self.pending_add(name, restore, absent, existed=path.exists())
 
-        feature.setdefault("name", name)
-        feature["updated_at"] = now_iso()
         write_json(path, feature)
-        self.touch_summary(state, name, feature)
         self.save_state(state)
 
     def touch_summary(self, state: dict, name: str, feature: dict) -> None:
@@ -148,7 +150,7 @@ class Store:
         tests_passed = summed or feature.get("tests_passed", 0)
         feature["tests_passed"] = tests_passed
         feature["tasks_total"] = len(tasks) or feature.get("tasks_total", 0)
-        state["features"][name] = {
+        summary = {
             "name": name,
             "status": feature.get("status", "DRAFT"),
             "current_task": feature.get("current_task", 0),
@@ -160,6 +162,14 @@ class Store:
             "blocked_reason": feature.get("blocked_reason"),
             "updated_at": feature.get("updated_at"),
         }
+        # 多端模式（可选）：targets 状态由其 tasks 自动推导，避免人工不一致
+        if feature.get("targets"):
+            feature["targets"] = derive_target_states(feature)
+            summary["targets"] = feature["targets"]
+            summary["primary_target"] = feature.get("primary_target")
+            summary["targets_done"] = sum(1 for v in feature["targets"].values() if v == "done")
+            summary["targets_total"] = len(feature["targets"])
+        state["features"][name] = summary
 
     # -- pending 逆向补丁
 
@@ -270,6 +280,32 @@ def write_json(path: Path, data: Any) -> None:
     os.replace(tmp, path)
 
 
+def task_target(feature: dict, task: dict) -> str:
+    """未标 target 的 task 归属于 primary_target（单端项目无该键 → None）。"""
+    return task.get("target") or feature.get("primary_target") or ""
+
+
+def derive_target_states(feature: dict) -> dict:
+    """{target: done|failed|in_progress|pending}，由 tasks 推导。"""
+    declared = feature.get("targets") or {}
+    if isinstance(declared, list):
+        declared = {t: "pending" for t in declared}
+    states = {}
+    for target in declared:
+        owned = [t for t in (feature.get("tasks") or []) if task_target(feature, t) == target]
+        if not owned:
+            states[target] = "pending"
+        elif any(t.get("status") == "failed" for t in owned):
+            states[target] = "failed"
+        elif all(t.get("status") == "done" for t in owned):
+            states[target] = "done"
+        elif any(t.get("status") == "in_progress" for t in owned):
+            states[target] = "in_progress"
+        else:
+            states[target] = "pending"
+    return states
+
+
 def diff_top_level(old: dict, new: dict) -> tuple[dict, list]:
     restore, absent = {}, []
     for key in set(old) | set(new):
@@ -341,14 +377,37 @@ def cmd_get(store: Store, args) -> None:
             print(json.dumps(feature, ensure_ascii=False, indent=2))
             return
         summary = state["features"].get(name, {})
-        print(f"# {name}  {feature.get('status','?')}  "
-              f"{summary.get('tasks_done',0)}/{summary.get('tasks_total',0)} tasks")
-        for task in feature.get("tasks") or []:
+        head = (f"# {name}  {feature.get('status','?')}  "
+                f"{summary.get('tasks_done',0)}/{summary.get('tasks_total',0)} tasks")
+        targets = feature.get("targets") or {}
+        if targets:
+            head += "  [" + " · ".join(f"{t} {s}" for t, s in targets.items()) + "]"
+        print(head)
+
+        def render(task: dict, indent: str) -> None:
             mark = {"done": "+", "failed": "x", "in_progress": "~", "pending": "."}.get(task.get("status"), "?")
-            print(f"  [{mark}] {task.get('id')} {task.get('name','')} "
+            print(f"{indent}[{mark}] {task.get('id')} {task.get('name','')} "
                   f"tests {task.get('tests_passed',0)}/{task.get('tests_total',0)}")
+
+        if targets:
+            for target in targets:
+                mine = [t for t in (feature.get("tasks") or []) if task_target(feature, t) == target]
+                if not mine:
+                    print(f"  {target}: (尚未拆解 task)")
+                    continue
+                print(f"  {target}")
+                for task in mine:
+                    render(task, "    ")
+        else:
+            for task in feature.get("tasks") or []:
+                render(task, "  ")
         for bug in feature.get("bugs") or []:
-            print(f"  bug {bug.get('id')} {bug.get('status')} {bug.get('symptom','')[:40]}")
+            affected = bug.get("affected_targets")
+            scope = f" [{','.join(affected)}]" if affected else ""
+            print(f"  bug {bug.get('id')} {bug.get('status')}{scope} {bug.get('symptom','')[:40]}")
+        parity = feature.get("parity")
+        if parity:
+            print(f"  parity: {parity.get('status')} {parity.get('gaps') or ''}".rstrip())
         return
     # 默认摘要：单行
     print(summary_line(name, state["features"].get(name, {})))
@@ -437,6 +496,79 @@ def cmd_create(store: Store, args) -> None:
     info(f"created {args.feature}")
 
 
+MARKERS = {
+    "android": ["android", "app/src/main", "build.gradle", "build.gradle.kts", "settings.gradle",
+                "settings.gradle.kts", "AndroidManifest.xml"],
+    "ios": ["ios", "Podfile", "*.xcodeproj", "*.xcworkspace", "Package.swift"],
+    "harmony": ["harmony", "harmonyos", "oh-package.json5", "build-profile.json5", "module.json5",
+                "entry/src/main"],
+}
+
+
+def _has_marker(root: Path, patterns: list) -> bool:
+    for pat in patterns:
+        candidate = root / pat
+        if candidate.exists():
+            return True
+        if "*" in pat and any(root.glob(pat)):
+            return True
+    return False
+
+
+def cmd_detect_targets(store: Store, args) -> None:
+    """探测项目是否为多端结构；尊重 conventions.md 中已记录的 multi_target: off。"""
+    conventions = store.root / "docs" / "team" / "conventions.md"
+    if conventions.exists():
+        text = conventions.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"multi_target\s*:\s*off", text, re.IGNORECASE):
+            info("multi_target: off  已记录在 conventions.md，不再询问")
+            return
+    found = [name for name, pats in MARKERS.items() if _has_marker(store.root, pats)]
+    if len(found) >= 2:
+        info(f"multi_target: detected [{', '.join(found)}]  → 建议询问是否需要多端对齐")
+        if args.json:
+            print(json.dumps({"detected": found, "suggest_ask": True}, ensure_ascii=False))
+    else:
+        info(f"multi_target: none  (检出: {', '.join(found) or '—'}) → 按单端处理，无需询问")
+
+
+def cmd_targets(store: Store, args) -> None:
+    state = store.load_state()
+    feature = store.load_feature(args.feature)
+    if args.action == "list" or not args.action:
+        targets = feature.get("targets") or {}
+        if not targets:
+            info(f"{args.feature}: 单端模式（未声明 targets）")
+            return
+        print(f"{args.feature}  primary={feature.get('primary_target') or '-'}")
+        for target, status in targets.items():
+            count = sum(1 for t in (feature.get("tasks") or []) if task_target(feature, t) == target)
+            print(f"  {target:10s} {status:12s} {count} task(s)")
+        return
+    if args.action != "add":
+        fail(f"未知 action: {args.action}（支持 add|list）")
+    names = [t.strip() for t in (args.target_list or "").split(",") if t.strip()]
+    if not names:
+        fail("请给出 targets，例如: targets add <feature> android,ios,harmony")
+    primary = args.primary or feature.get("primary_target") or (feature.get("targets") and next(iter(feature["targets"]))) or names[0]
+    if primary not in names:
+        names.insert(0, primary)
+    existing = set((feature.get("targets") or {}).keys())
+    added = [n for n in names if n not in existing]
+    # 已有 tasks 未标 target → 归到 primary，保持历史不变
+    for task in feature.get("tasks") or []:
+        if not task.get("target"):
+            task["target"] = primary
+    feature["primary_target"] = primary
+    feature["targets"] = derive_target_states({**feature, "targets": {n: "pending" for n in names}})
+    if args.contract:
+        feature["contract"] = args.contract
+    store.save_feature(args.feature, feature, state)
+    info(f"targets -> {', '.join(feature['targets'])} (primary={primary})")
+    if added:
+        info(f"新增: {', '.join(added)}；为这些端拆解 task 后状态会自动更新")
+
+
 def cmd_switch(store: Store, args) -> None:
     state = store.load_state()
     if args.feature not in state["features"]:
@@ -476,9 +608,13 @@ def cmd_task_status(store: Store, args) -> None:
     if args.model:
         target["implemented_by"] = args.model
     if args.status == "done":
-        done = sum(1 for t in tasks if t.get("status") == "done")
         feature["tasks_total"] = len(tasks)
-        if done == len(tasks) and feature.get("status") not in ("DONE",):
+        if feature.get("targets"):
+            # 多端：所有 target 都完成才算整体进入收尾（DONE 仍需显式设置）
+            all_done = all(s == "done" for s in derive_target_states(feature).values())
+        else:
+            all_done = all(t.get("status") == "done" for t in tasks)
+        if all_done and feature.get("status") not in ("DONE",):
             feature["status"] = "IN_PROGRESS"
     store.save_feature(args.feature, feature, state)
     info(summary_line(args.feature, state["features"][args.feature]))
@@ -696,6 +832,17 @@ def build_parser() -> argparse.ArgumentParser:
     sw = sub.add_parser("switch", help="切换 active feature")
     sw.add_argument("feature")
 
+    # 多端支持（可选，单端项目不使用）
+    tg = sub.add_parser("targets", help="多端 targets 管理（add|list）")
+    tg.add_argument("action", choices=["add", "list"])
+    tg.add_argument("feature")
+    tg.add_argument("target_list", nargs="?", help="逗号分隔，如 android,ios,harmony")
+    tg.add_argument("--primary", help="主端（未标 target 的 task 归属）")
+    tg.add_argument("--contract", help="契约文件路径")
+
+    dt = sub.add_parser("detect-targets", help="探测项目是否为多端结构")
+    dt.add_argument("--json", action="store_true")
+
     g = sub.add_parser("get", help="读取 feature（默认单行摘要）")
     g.add_argument("feature", nargs="?")
     g.add_argument("--full", action="store_true", help="输出任务级明细（仍不含完整 JSON）")
@@ -755,6 +902,8 @@ def main(argv: list[str]) -> int:
         "active": cmd_active,
         "create": cmd_create,
         "switch": cmd_switch,
+        "targets": cmd_targets,
+        "detect-targets": cmd_detect_targets,
         "get": cmd_get,
         "set": cmd_set,
         "task-status": cmd_task_status,

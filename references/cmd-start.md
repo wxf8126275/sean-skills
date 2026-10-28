@@ -35,3 +35,26 @@
    ```
 
 6. **输出**：需求文件路径 + 状态 `DRAFT` + 下一步 `sean plan <name>`。
+
+---
+
+## 多端需求（可选，默认不启用）
+
+仅当同一需求要由多个端（Android / iOS / HarmonyOS 等）分别实现时：
+
+1. **先探测，避免遗漏**（脚本完成，不要自己 `ls` 全仓）：
+   ```bash
+   python3 <sean-root>/scripts/sean_state.py detect-targets
+   ```
+   返回 `detected [...]` 时问用户一次是否多端对齐；返回 `off` 则永不再问。
+
+2. **声明确认启用**：
+   ```bash
+   python3 <sean-root>/scripts/sean_state.py targets add <name> android,ios,harmony --primary android
+   ```
+
+3. 用户选「否」时，在 `docs/team/conventions.md` 追加 `multi_target: off`，后续不再询问。
+
+启用后 `sean plan` 之前必须先产出契约。完整流程见 `references/multi-target.md`。
+
+> 不启用时本步骤完全跳过，需求文档与单端流程一字不差。

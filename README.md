@@ -78,6 +78,41 @@ sean handoff comments
 sean review comments
 ```
 
+## 多端一致（可选，默认关闭）
+
+同一需求由 Android / iOS / HarmonyOS 等多端分别实现时，常规做法会产生「三份需求、三份计划、三套测试」的结构性漂移。sean 提供**可选**的多端对齐能力，**单端项目不会接触任何相关内容**。
+
+```bash
+# 1. 探测（脚本完成，不扫全仓）
+python3 <sean-root>/scripts/sean_state.py detect-targets
+#   → multi_target: detected [android, ios, harmony]，询问一次是否启用
+#   → 用户选"否"后写 conventions.md: multi_target: off，永不再问
+
+# 2. 启用
+sean start login-v2 "登录重构" --targets android,ios,harmony
+
+# 3. 先契约，后计划
+#    docs/contracts/<date>-login-v2/contract.md   （模板 templates/contract.md）
+#    docs/contracts/<date>-login-v2/cases/*.json  （共享 golden cases）
+
+# 4. 各端只跑自己的 task
+sean task login-v2 4        # iOS 工程师
+
+# 5. 一致性闸门
+python3 <sean-root>/scripts/sean_parity.py --feature login-v2
+#   Verdict: PASS → 才允许 feature 置 DONE
+```
+
+设计要点：
+
+- **目标不是代码一致，而是行为等价**。平台差异走 `Platform Delta` 白名单，其余差异视为缺陷。
+- **共享 golden cases** 是消除逻辑漂移的关键：三端跑同一批 JSON 用例，而不是各写各的断言。
+- **不要求三端都装 sean**：`results/<target>.json` 支持外部注入（手工填或 CI 产出）。
+- **零默认成本**：不启用时 state 无 `targets` 键、无契约文件、不加载 `references/multi-target.md`。
+- 事后再启用也可行：`sean targets add <name> android,ios,harmony` 会把已有 task 归入主端，历史与 undo 全部保留。
+
+完整流程与检查清单见 `references/multi-target.md`。
+
 ## 成本控制：什么时候不要用 sean
 
 sean 有固定开销（路由加载 + 状态落盘）。以下情形**直接干活**：

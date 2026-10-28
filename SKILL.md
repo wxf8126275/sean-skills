@@ -64,6 +64,7 @@ sean 的价值在"知识可传承"，但**传承的载体是可读的结论，�
 | `artifact <name> <action> [path] [--execute]` | 执行/验证产物（默认 dry-run） | `cmd-artifact.md` |
 | `dispatch / sync / fix / undo / retry / list / status / report / switch / clean / learn / findings / export` | 维护类命令 | `cmd-maintenance.md` |
 | 需要 state 字段定义时 | — | `state-schema.md` |
+| **多端需求**（可选，仅同需求多端实现时） | 契约 + 一致性校验 | `multi-target.md` |
 
 **skill 根目录** = 本 `SKILL.md` 所在目录（`install.sh` 默认装到 `~/.hermes/skills/your-skills/sean/`）。不确定时先 `ls` 确认 `references/` 存在，再拼绝对路径读取。
 
