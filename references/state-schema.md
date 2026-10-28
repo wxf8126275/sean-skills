@@ -175,8 +175,11 @@ docs/.sean/
     {
       "feature": "auth",
       "existed": true,
-      "keys": { "status": "PLANNED", "tasks": [ /* 变更前的旧值 */ ] },
-      "absent": ["blocked_reason"]
+      "keys": { "status": "PLANNED" },
+      "absent": ["blocked_reason"],
+      "lists": {
+        "tasks": { "changed": {"3": { /* 旧 task */ }}, "added": ["4"], "removed": [{ /* 旧 task */ }] }
+      }
     }
   ],
   "files_created": ["src/a.py"],
@@ -185,8 +188,10 @@ docs/.sean/
 }
 ```
 
-**关键设计**：`restore.keys` 只保存**被改动顶层键的旧值**，`absent` 列出本次新增的键（undo 时删除）。
-不再保存 `before` / `after` 两份完整 state 快照——单条记录因此从「2 × 全量 state」降到通常 <1KB，且**不随项目内 feature 总数增长**。
+**关键设计**：
+- `restore.keys` 只保存**被改动标量顶层键的旧值**，`absent` 列出本次新增的键（undo 时删除）。
+- `restore.lists` 对 `tasks`/`findings`/`bugs` 做**元素级 diff**（`changed`/`added`/`removed`），不再存整列快照；id 统一为字符串 key（JSON 序列化会把 int key 转字符串）。
+- 不再保存 `before`/`after` 两份完整 state 快照——单条记录降到通常 <1KB，且**不随 feature 的 task 数线性膨胀**。
 
 文件内容不做内联备份：`files_modified` 依靠 git 还原（`git checkout -- <path>`），`files_created` 直接删除。
 

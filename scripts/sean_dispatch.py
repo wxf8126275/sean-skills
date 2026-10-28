@@ -122,9 +122,15 @@ def load_tasks_from_state(root: Path, feature: str) -> list[Task] | None:
     for t in data.get("tasks") or []:
         if not isinstance(t, dict) or "id" not in t:
             continue
+        try:
+            task_id = int(t["id"])
+        except (ValueError, TypeError):
+            continue  # 非数字 id 无法参与 wave 分组，跳过
         depends = t.get("depends_on") or []
+        if not isinstance(depends, (list, tuple)):
+            depends = [depends] if depends else []
         tasks.append(Task(
-            id=t["id"],
+            id=task_id,
             name=t.get("name", ""),
             depends_on=[int(x) for x in depends if str(x).isdigit()],
             parallel_safe=bool(t.get("parallel_safe")),

@@ -104,6 +104,7 @@ class TestUndoEndToEnd(unittest.TestCase):
             sean_state.cmd_undo(store, self._args())
             feature = store.load_feature("demo")
             self.assertEqual(feature.get("tasks"), [])
+            self.assertEqual(feature.get("tasks_total"), 0)  # 归零不残留旧值
 
     def test_undo_restores_changed_task(self):
         """task-status 改状态后 undo，元素级还原为原状态。"""

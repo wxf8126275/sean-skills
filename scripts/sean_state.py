@@ -148,17 +148,16 @@ class Store:
     def touch_summary(self, state: dict, name: str, feature: dict) -> None:
         tasks = feature.get("tasks") or []
         done = sum(1 for t in tasks if t.get("status") == "done")
-        summed = sum(t.get("tests_passed") or 0 for t in tasks)
-        tests_passed = summed or feature.get("tests_passed", 0)
-        feature["tests_passed"] = tests_passed
-        feature["tasks_total"] = len(tasks) or feature.get("tasks_total", 0)
+        # 直接求和/计数，不做 or 回退——否则值归零（如 undo 清空 tasks）时不会更新
+        feature["tests_passed"] = sum(t.get("tests_passed") or 0 for t in tasks)
+        feature["tasks_total"] = len(tasks)
         summary = {
             "name": name,
             "status": feature.get("status", "DRAFT"),
             "current_task": feature.get("current_task", 0),
             "tasks_total": feature["tasks_total"],
             "tasks_done": done,
-            "tests_passed": tests_passed,
+            "tests_passed": feature["tests_passed"],
             "open_bugs": sum(1 for b in (feature.get("bugs") or []) if b.get("status") in ("open", "fixing")),
             "open_findings": sum(1 for f in (feature.get("findings") or []) if f.get("status") == "open"),
             "blocked_reason": feature.get("blocked_reason"),
@@ -814,10 +813,19 @@ def cmd_undo(store: Store, args) -> None:
     if file_actions:
         if args.with_files:
             for kind, path in file_actions:
-                resolve = store.root / path
-                if kind == "delete" and resolve.exists():
-                    resolve.unlink()
-                    info(f"  deleted {path}")
+                resolve = (store.root / path).resolve()
+                # 防路径穿越：目标必须仍在项目根内
+                if store.root.resolve() not in resolve.parents:
+                    print(f"  跳过项目外路径: {path}")
+                    continue
+                if kind == "delete":
+                    if resolve.exists():
+                        resolve.unlink()
+                        info(f"  deleted {path}")
+                else:  # git-restore
+                    subprocess.run(["git", "checkout", "--", path], cwd=store.root,
+                                   capture_output=True, text=True)
+                    info(f"  git restored {path}")
         else:
             print("文件操作（如需执行加 --with-files）：")
             for kind, path in file_actions:
