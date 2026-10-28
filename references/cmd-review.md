@@ -68,6 +68,8 @@ grep -nE 'assert|expect\(' <test files>
 
 **证据来源只用前三步已获得的信息**（state、diff、grep 结果、测试报告）。**不要**为了给某个维度找证据去额外读文件或跑新命令。找不到证据 → 记 `unobserved`，分数上限 59，这本身就是有效结论。
 
+> **live 验证要求**：涉及真实数据库（尤其含 JOIN 查询）或外部服务的 feature，`change-validation` 维度要拿到 `outcome-supported`，必须包含一次 **live 验证**（真实 DB/服务，非 mock）——`grep` 机械检查与 mock 单测都测不出 `ambiguous column` 这类运行时错误。缺 live 证据时该维度上限降到 `exercised`（94）。
+
 ### 5. 生成 findings
 
 只为证据状态 < `exercised` **且**已被检查到的缺口生成 finding：

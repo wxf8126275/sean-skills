@@ -136,9 +136,11 @@ class Store:
         # 先做派生字段计算（targets 状态、tests 汇总），再 diff，保证补丁完整
         self.touch_summary(state, name, feature)
 
-        restore, absent = diff_top_level(old, feature)
-        if restore or absent:
-            self.pending_add(name, restore, absent, existed=path.exists())
+        restore, absent, lists_patch = diff_top_level(old, feature)
+        if restore or absent or lists_patch:
+            # 对变化的列表字段，传本次 save 前的完整旧列表；pending 用 setdefault 保留操作开始前的那份
+            old_lists = {k: old[k] for k in lists_patch}
+            self.pending_add(name, restore, absent, old_lists, existed=path.exists())
 
         write_json(path, feature)
         self.save_state(state)
@@ -178,11 +180,11 @@ class Store:
             return json.loads(self.pending_file.read_text(encoding="utf-8"))
         return {"entries": []}
 
-    def pending_add(self, name: str, restore: dict, absent: list, existed: bool) -> None:
+    def pending_add(self, name: str, restore: dict, absent: list, lists: dict, existed: bool) -> None:
         pending = self.load_pending()
         entry = next((e for e in pending["entries"] if e["feature"] == name), None)
         if entry is None:
-            entry = {"feature": name, "existed": existed, "keys": {}, "absent": []}
+            entry = {"feature": name, "existed": existed, "keys": {}, "absent": [], "lists": {}}
             pending["entries"].append(entry)
         # 保留最早的旧值，不被后续操作覆盖
         for k, v in restore.items():
@@ -190,6 +192,9 @@ class Store:
         for k in absent:
             if k not in entry["absent"]:
                 entry["absent"].append(k)
+        # 列表字段：保留操作开始前的完整旧列表（history_add 时再转成元素级 diff）
+        for k, old_list in lists.items():
+            entry["lists"].setdefault(k, old_list)
         write_json(self.pending_file, pending)
 
     def pending_clear(self) -> None:
@@ -204,6 +209,19 @@ class Store:
         entries = pending.get("entries", [])
         if not entries and not files_created and not files_modified:
             return ""
+        # 列表字段：把 pending 里的「操作开始前完整旧列表」转成元素级 diff（相对操作结束后的当前状态）
+        for entry in entries:
+            if entry.get("lists"):
+                current = self._load_feature_current(entry["feature"])
+                patches = {}
+                for key, old_list in entry["lists"].items():
+                    patch = diff_list(old_list, current.get(key) or [])
+                    if patch:
+                        patches[key] = patch
+                if patches:
+                    entry["lists"] = patches
+                else:
+                    entry.pop("lists", None)
         event_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{action}"
         record = {
             "id": event_id,
@@ -229,6 +247,16 @@ class Store:
         self.pending_clear()
         prune_history(self)
         return event_id
+
+    def _load_feature_current(self, name: str) -> dict:
+        """读取 feature 当前磁盘状态（history 落盘时用于把旧列表 diff 成元素级补丁）。"""
+        path = self.feature_file(name)
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     def history_index(self) -> list:
         if not self.index_file.exists():
@@ -306,9 +334,43 @@ def derive_target_states(feature: dict) -> dict:
     return states
 
 
-def diff_top_level(old: dict, new: dict) -> tuple[dict, list]:
-    restore, absent = {}, []
+# 按元素 id 做增量 diff 的列表字段（tasks / findings / bugs）
+LIST_KEYS = {"tasks", "findings", "bugs"}
+
+
+def diff_list(old_items: list, new_items: list) -> dict:
+    """按元素 id 做增量 diff，返回 {changed, added, removed}（无差异返回 {}）。
+
+    changed / removed 存旧元素，added 存 id。undo 时据此还原，避免整列快照。
+    所有 id 统一转字符串作为 dict key——JSON 序列化会把 int key 转字符串，保持一致。
+    """
+    old_by_id = {str(i.get("id")): i for i in old_items if isinstance(i, dict)}
+    new_by_id = {str(i.get("id")): i for i in new_items if isinstance(i, dict)}
+    changed = {k: old_by_id[k] for k in set(old_by_id) & set(new_by_id)
+               if old_by_id[k] != new_by_id[k]}
+    added = [k for k in new_by_id if k not in old_by_id]
+    removed = [old_by_id[k] for k in old_by_id if k not in new_by_id]
+    if not changed and not added and not removed:
+        return {}
+    return {"changed": changed, "added": added, "removed": removed}
+
+
+def diff_top_level(old: dict, new: dict) -> tuple[dict, list, dict]:
+    """返回 (restore, absent, lists)。
+
+    restore/absent：标量与非列表顶层键的旧值 / 新增键。
+    lists：列表字段（LIST_KEYS）的元素级 diff，形如 {key: {changed, added, removed}}。
+    """
+    restore, absent, lists = {}, [], {}
     for key in set(old) | set(new):
+        if key == "updated_at":
+            # 派生字段：每次 save 必更新，记入逆向补丁只是噪音，且 undo 后会被重新写入
+            continue
+        if key in LIST_KEYS and isinstance(old.get(key), list) and isinstance(new.get(key), list):
+            patch = diff_list(old[key], new[key])
+            if patch:
+                lists[key] = patch
+            continue
         if key in old and key in new:
             if old[key] != new[key]:
                 restore[key] = old[key]
@@ -316,14 +378,28 @@ def diff_top_level(old: dict, new: dict) -> tuple[dict, list]:
             restore[key] = old[key]
         else:
             absent.append(key)
-    return restore, absent
+    return restore, absent, lists
+
+
+def restore_list_patch(items: list, patch: dict) -> list:
+    """按元素级补丁还原列表（changed/added/removed）。id 统一按字符串键处理。"""
+    by_id = {str(i.get("id")): i for i in items if isinstance(i, dict)}
+    for k, old_item in patch.get("changed", {}).items():
+        by_id[str(k)] = old_item
+    for k in patch.get("added", []):
+        by_id.pop(str(k), None)
+    for old_item in patch.get("removed", []):
+        by_id[str(old_item.get("id"))] = old_item
+    return list(by_id.values())
 
 
 def git_head(root: Path) -> str | None:
     try:
         out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=root,
                              capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() or None if out.returncode == 0 else None
+        if out.returncode != 0:
+            return None
+        return out.stdout.strip() or None
     except Exception:
         return None
 
@@ -708,6 +784,9 @@ def cmd_undo(store: Store, args) -> None:
                 feature[key] = value
             for key in entry.get("absent", []):
                 feature.pop(key, None)
+            # 列表字段：按元素级补丁还原（新格式）；旧记录里 keys 中仍是整列快照，走上面的整体赋值
+            for key, patch in entry.get("lists", {}).items():
+                feature[key] = restore_list_patch(feature.get(key) or [], patch)
             # updated_at / name 由 save_feature 自动维护，不参与「是否已清空」判定
             meaningful = {k: v for k, v in feature.items() if k not in ("updated_at", "name")}
             if not meaningful and not entry.get("existed"):
@@ -747,7 +826,7 @@ def cmd_undo(store: Store, args) -> None:
 
 
 def cmd_sync(store: Store, args) -> None:
-    """从 test-reports + artifacts catalog 重建 feature 状态。"""
+    """从 test-reports 重建 task 状态（不重建产物状态，产物一致性用 sean artifact check）。"""
     state = store.load_state()
     name = args.feature
     feature = store.load_feature(name)

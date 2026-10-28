@@ -109,6 +109,34 @@ def parse_plan(plan_path: str) -> list[Task]:
     return [tasks[k] for k in sorted(tasks.keys())]
 
 
+def load_tasks_from_state(root: Path, feature: str) -> list[Task] | None:
+    """从 state 的 features/<name>.json 读取结构化 tasks（优先于解析 plan.md）。"""
+    f = root / "docs" / ".sean" / "features" / f"{feature}.json"
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    tasks = []
+    for t in data.get("tasks") or []:
+        if not isinstance(t, dict) or "id" not in t:
+            continue
+        depends = t.get("depends_on") or []
+        tasks.append(Task(
+            id=t["id"],
+            name=t.get("name", ""),
+            depends_on=[int(x) for x in depends if str(x).isdigit()],
+            parallel_safe=bool(t.get("parallel_safe")),
+            files_create=list(t.get("files_create") or []),
+            files_modify=list(t.get("files_modify") or []),
+            test_file=t.get("test_file", "") or "",
+            complexity=t.get("complexity", "low") or "low",
+            acceptance=t.get("acceptance", "") or "",
+        ))
+    return tasks or None
+
+
 def group_waves(tasks: list[Task], start_n: int = 1) -> list[Wave]:
     """Group tasks into dependency waves."""
     # Filter tasks from start_n onwards
@@ -148,14 +176,19 @@ def group_waves(tasks: list[Task], start_n: int = 1) -> list[Wave]:
     return waves
 
 
-def generate_context_package(task: Task, project_root: str, conventions: str, test_pattern: str) -> dict:
-    """Generate Task Context Package for a sub-agent."""
+def generate_context_package(task: Task, project_root: str, conventions_path: str, test_pattern_path: str) -> dict:
+    """Generate Task Context Package for a sub-agent.
+
+    conventions_path / test_pattern_path 只传路径不传全文——子智能体自行按需读取，
+    避免每个子 agent 重复吞下同样的几 KB（与 cmd-run.md 的精简契约一致）。
+    """
     return {
         "task_id": task.id,
         "task_name": task.name,
         "project_root": project_root,
-        "conventions": conventions,
-        "test_pattern": test_pattern,
+        "conventions_path": conventions_path,
+        "conventions_digest": "",   # ≤10 行关键约束，由主 agent 分发时补充
+        "test_pattern_path": test_pattern_path,
         "files_create": task.files_create,
         "files_modify": task.files_modify,
         "test_file": task.test_file,
@@ -178,7 +211,7 @@ def generate_context_package(task: Task, project_root: str, conventions: str, te
     }
 
 
-def format_output(waves: list[Wave], project_root: str, conventions: str, test_pattern: str, fmt: str) -> str:
+def format_output(waves: list[Wave], project_root: str, conventions_path: str, test_pattern_path: str, fmt: str) -> str:
     """Format waves output."""
     if fmt == "json":
         output = []
@@ -189,7 +222,7 @@ def format_output(waves: list[Wave], project_root: str, conventions: str, test_p
                 "parallel_safe_tasks": [t.id for t in wave.parallel_safe_tasks],
                 "serial_tasks": [t.id for t in wave.serial_tasks],
                 "context_packages": [
-                    generate_context_package(t, project_root, conventions, test_pattern)
+                    generate_context_package(t, project_root, conventions_path, test_pattern_path)
                     for t in wave.parallel_safe_tasks
                 ],
             }
@@ -235,29 +268,26 @@ def main():
     parser.add_argument("--project-root", default=".", help="Project root path")
     parser.add_argument("--conventions", default="", help="Path to conventions.md")
     parser.add_argument("--test-pattern", default="", help="Path to existing test file for reference")
+    parser.add_argument("--feature", default="", help="Feature 名；提供时优先读 state 结构化 tasks，plan 作 fallback")
     args = parser.parse_args()
 
-    # Load conventions
-    conventions_content = ""
-    if args.conventions and Path(args.conventions).exists():
-        conventions_content = Path(args.conventions).read_text(encoding="utf-8")
+    # conventions / test-pattern 只传路径，不读全文（子智能体按需读取）
+    conventions_path = args.conventions or ""
+    test_pattern_path = args.test_pattern or ""
 
-    # Load test pattern
-    test_pattern_content = ""
-    if args.test_pattern and Path(args.test_pattern).exists():
-        test_pattern_content = Path(args.test_pattern).read_text(encoding="utf-8")
-
-    # Parse plan
-    tasks = parse_plan(args.plan_path)
+    # 优先读 state 的结构化 tasks（权威数据源），缺失或解析失败才回退解析 plan.md
+    tasks = load_tasks_from_state(Path(args.project_root).resolve(), args.feature) if args.feature else None
+    if tasks is None:
+        tasks = parse_plan(args.plan_path)
     if not tasks:
-        print("ERROR: No tasks found in plan", file=sys.stderr)
+        print("ERROR: No tasks found in plan or state", file=sys.stderr)
         sys.exit(1)
 
     # Group waves
     waves = group_waves(tasks, args.start)
 
     # Output
-    print(format_output(waves, args.project_root, conventions_content, test_pattern_content, args.format))
+    print(format_output(waves, args.project_root, conventions_path, test_pattern_path, args.format))
 
 
 if __name__ == "__main__":

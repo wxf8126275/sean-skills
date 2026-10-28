@@ -29,10 +29,10 @@ python3 <sean-root>/scripts/sean_dispatch.py docs/plans/2026-09-29-myfeature.md 
 **状态恢复**：从测试报告重建 state。用于 state.json 与真实测试结果脱钩时（例如进程被杀）。
 
 1. 扫描 `docs/test-reports/*-<name>/task-*.md`。
-2. 扫描 `docs/artifacts/*-<name>.md` catalog。
-3. 从报告内容推导 task 状态（PASS → done；FAIL → failed；无报告 → pending）。
-4. 从 catalog 推导产物状态（created / executed / verified / declared）。
-5. 重建 state，输出 diff，覆盖前询问。
+2. 从报告内容推导 task 状态（PASS → done；FAIL → failed；无报告 → pending）。
+3. 重建 state，输出 diff，覆盖前询问。
+
+> sync 只重建 task 状态，**不重建产物（artifact）状态**——产物是否真实执行过无法从磁盘可靠推断。产物一致性请用 `sean artifact <name> list`（catalog ↔ state ↔ 磁盘三方校验）。
 
 一条命令完成：
 
